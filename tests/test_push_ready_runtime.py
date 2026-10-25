@@ -16,6 +16,33 @@ SPEC.loader.exec_module(PUSH_READY)
 
 
 class PushReadyRuntimeTests(unittest.TestCase):
+    def test_renamed_origin_formats_keep_their_exact_owner_binding(self):
+        for url in (
+            "https://github.com/ltn-it/modulix-validation.git",
+            "ssh://git@github.com/ltn-it/modulix-validation.git",
+            "git@github.com:ltn-it/modulix-validation.git",
+        ):
+            with self.subTest(url=url):
+                current = PUSH_READY.governed_push_remote_from_url("origin", url)
+                self.assertEqual("ltn-it/modulix-validation", current["repository"])
+                legacy = PUSH_READY.governed_push_remote_from_url(
+                    "origin", url.replace("ltn-it", "lightning-it")
+                )
+                self.assertEqual("lightning-it/modulix-validation", legacy["repository"])
+                self.assertNotEqual(current["url_sha256"], legacy["url_sha256"])
+
+    def test_renamed_fetch_does_not_reuse_a_differently_bound_push_remote(self):
+        with mock.patch.object(
+            PUSH_READY,
+            "git_output",
+            side_effect=[
+                "https://github.com/ltn-it/modulix-validation.git",
+                "https://github.com/lightning-it/modulix-validation.git",
+            ],
+        ):
+            with self.assertRaisesRegex(RuntimeError, "same governed repository"):
+                PUSH_READY.fetch_authoritative_base("develop", "refs/remotes/origin/develop")
+
     def test_https_base_fetch_uses_scoped_header_not_argv(self):
         completed = object()
         runner = mock.Mock(return_value=completed)

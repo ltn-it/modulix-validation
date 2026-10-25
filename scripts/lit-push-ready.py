@@ -3718,14 +3718,22 @@ def governed_push_remote_from_url(
     ):
         raise RuntimeError("push-ready requires the governed origin remote")
     value = url[:-4] if url.endswith(".git") else url
-    prefixes = (
-        "https://github.com/lightning-it/",
-        "ssh://git@github.com/lightning-it/",
-        "git@github.com:lightning-it/",
+    # Preserve the owner in the binding: legacy installations and their exact
+    # evidence remain distinct from remotes using the renamed organization.
+    prefixes = tuple(
+        (owner, prefix)
+        for owner in ("ltn-it", "lightning-it")
+        for prefix in (
+            f"https://github.com/{owner}/",
+            f"ssh://git@github.com/{owner}/",
+            f"git@github.com:{owner}/",
+        )
     )
+    repository_owner = ""
     repository_name = ""
-    for prefix in prefixes:
+    for owner, prefix in prefixes:
         if value.startswith(prefix):
+            repository_owner = owner
             repository_name = value[len(prefix) :]
             break
     if repository_name != ".github" and not re.fullmatch(
@@ -3737,7 +3745,7 @@ def governed_push_remote_from_url(
     return {
         "name": "origin",
         "host": "github.com",
-        "repository": f"lightning-it/{repository_name}",
+        "repository": f"{repository_owner}/{repository_name}",
         "url_sha256": sha256_text(url),
     }
 
