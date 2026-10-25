@@ -66,6 +66,16 @@ class CandidateRequestTests(unittest.TestCase):
     def test_exact_request_is_accepted(self):
         self.assertEqual(self.validate(), self.request)
 
+    def test_retired_source_and_controller_names_are_not_current_identity(self):
+        for section, repository in (
+            ("source", "lightning-it/ansible-collection-supplementary"),
+            ("controller", "lightning-it/modulix-validation"),
+        ):
+            request = copy.deepcopy(self.request)
+            request[section]["repository"] = repository
+            with self.subTest(section=section), self.assertRaises(adapter.RequestError):
+                self.validate(request)
+
     def test_wrong_hash_noncanonical_duplicate_and_oversized_json_fail(self):
         canonical = adapter.canonical(self.request)
         for raw, request_id in [

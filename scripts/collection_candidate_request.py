@@ -14,9 +14,9 @@ from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlsplit
 
-SOURCE_REPOSITORY = "lightning-it/ansible-collection-supplementary"
+SOURCE_REPOSITORY = "ltn-it/ansible-collection-supplementary"
 SOURCE_WORKFLOW = ".github/workflows/collection-publish.yml"
-CONTROLLER_REPOSITORY = "lightning-it/modulix-validation"
+CONTROLLER_REPOSITORY = "ltn-it/modulix-validation"
 CONTROLLER_WORKFLOW = ".github/workflows/mlx90-collection-candidate-validation.yml"
 APP_ACTOR = "lightning-it-release-automation[bot]"
 APP_ACTOR_ID = 307565056

@@ -54,6 +54,7 @@ runs:
       run: |
         set -euo pipefail
         umask 077
+        echo 'WUNDER_DEVTOOLS_RUN_AS_HOST_UID=1' >> "$GITHUB_ENV"
         mkdir -p .candidate-control
         printf '%s' "$REQUEST_JSON" > .candidate-control/request.json
         jq -n --arg repository "$NEXUS_REPOSITORY" --arg url "$NEXUS_REPOSITORY_URL" \
@@ -75,7 +76,7 @@ runs:
         SOURCE_RUN_ID: ${{ steps.request.outputs.source-run-id }}
       run: |
         set -euo pipefail
-        gh api "repos/lightning-it/ansible-collection-supplementary/actions/runs/$SOURCE_RUN_ID" \
+        gh api "repos/ltn-it/ansible-collection-supplementary/actions/runs/$SOURCE_RUN_ID" \
           > .candidate-control/producer-run.json
         gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
           > .candidate-control/controller-run.json

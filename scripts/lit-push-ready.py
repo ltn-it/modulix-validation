@@ -118,7 +118,7 @@ AUTHORITATIVE_BASE_REFS = {
     "refs/remotes/origin/main": "main",
 }
 INTEGRATION_DIRECTORY_PREFIX = ".lit-integration-"
-COPILOT_DEVTOOL_IMAGE = "quay.io/l-it/ee-wunder-devtools-ubi9:v1.16.1@sha256:c5e8707e825fcddb3e7bbc7592ebdc99a02e6ba9fa2cad71b88bcd5c71bd4d08"
+COPILOT_DEVTOOL_IMAGE = "quay.io/l-it/ee-wunder-devtools-ubi9:v1.18.2@sha256:58955457d3410706520f34fa7ea9823d5650aa4844c562cd5c0107024d825711"
 CHECK_PROFILE = {
     "name": "repository-quality-profile",
     "command": ["scripts/lit-ci-profile.sh", "repository-quality"],

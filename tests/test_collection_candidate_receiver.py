@@ -3,6 +3,10 @@
 import copy
 import hashlib
 import io
+import json
+import os
+import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -265,6 +269,103 @@ class ReceiverTests(unittest.TestCase):
 
 
 class WorkflowCodeTests(unittest.TestCase):
+    def test_private_context_preserves_runner_uid_for_subsequent_devtools_steps(self):
+        import yaml
+
+        root = Path(__file__).resolve().parents[1]
+        context = yaml.safe_load(
+            (
+                root / ".github/actions/collection-candidate-context/action.yml"
+            ).read_text()
+        )
+        materialize = next(
+            step
+            for step in context["runs"]["steps"]
+            if step["name"]
+            == "Materialize nonsecret request and protected endpoint policy"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            environment = dict(os.environ)
+            environment.update(
+                GITHUB_ENV=str(directory / "github-env"),
+                REQUEST_JSON='{"version":2}',
+                NEXUS_REPOSITORY="fixture-candidates",
+                NEXUS_REPOSITORY_URL="https://fixture.invalid/repository/candidates",
+            )
+            subprocess.run(
+                ["bash", "-c", materialize["run"]],
+                cwd=directory,
+                env=environment,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertIn(
+                "WUNDER_DEVTOOLS_RUN_AS_HOST_UID=1",
+                (directory / "github-env").read_text().splitlines(),
+            )
+            control = directory / ".candidate-control"
+            self.assertEqual(stat.S_IMODE(control.stat().st_mode), 0o700)
+            for name in ("request.json", "config.json"):
+                self.assertEqual(stat.S_IMODE((control / name).stat().st_mode), 0o600)
+
+    def test_receipt_jobs_are_flattened_across_native_api_pages(self):
+        import yaml
+
+        root = Path(__file__).resolve().parents[1]
+        workflow = yaml.safe_load(
+            (
+                root / ".github/workflows/mlx90-collection-candidate-validation.yml"
+            ).read_text()
+        )
+        binding = next(
+            step
+            for step in workflow["jobs"]["sign"]["steps"]
+            if step.get("name")
+            == "Bind receipt to every real current-attempt native job"
+        )
+        command = binding["run"].split("WUNDER_DEVTOOLS_WORKSPACE_MODE=", 1)[0]
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            (directory / ".candidate-control").mkdir()
+            binary = directory / "bin"
+            binary.mkdir()
+            gh = binary / "gh"
+            gh.write_text(
+                "#!/bin/sh\nset -eu\n"
+                'for argument in "$@"; do\n'
+                '  test "$argument" != --jq || exit 9\n'
+                'done\nprintf "%s\\n" "$@" > "$GH_ARGS"\n'
+                'printf "%s\\n" "$JOB_PAGES"\n'
+            )
+            gh.chmod(0o700)
+            jobs = [{"id": value} for value in (1, 2, 3)]
+            environment = dict(os.environ)
+            environment.update(
+                PATH=f"{binary}:{environment['PATH']}",
+                GH_ARGS=str(directory / "gh-args"),
+                JOB_PAGES=json.dumps([{"jobs": jobs[:2]}, {"jobs": jobs[2:]}]),
+                GITHUB_REPOSITORY="ltn-it/modulix-validation",
+                GITHUB_RUN_ID="42",
+                GITHUB_RUN_ATTEMPT="1",
+            )
+            subprocess.run(
+                ["bash", "-c", command],
+                cwd=directory,
+                env=environment,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(
+                json.loads((directory / ".candidate-control/jobs.json").read_text()),
+                jobs,
+            )
+            arguments = (directory / "gh-args").read_text().splitlines()
+            self.assertIn("--paginate", arguments)
+            self.assertIn("--slurp", arguments)
+
     def test_required_profiles_and_signature_depend_on_success_without_noop(self):
         import yaml
 

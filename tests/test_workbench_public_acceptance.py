@@ -10,7 +10,6 @@ from pathlib import Path
 
 import yaml
 
-
 SCRIPT = Path(__file__).parents[1] / ".github/scripts/workbench-public-acceptance.py"
 SPEC = importlib.util.spec_from_file_location("workbench_public_acceptance", SCRIPT)
 assert SPEC is not None
@@ -84,7 +83,7 @@ class WorkbenchAcceptanceTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn('python-version: "3.11"', workflow)
         self.assertIn(
-            "lightning-it/modulix-validation/.github/actions/run-quality-profile"
+            "ltn-it/modulix-validation/.github/actions/run-quality-profile"
             "@4b80722fbcc90da49dc2881facaea7dda3a2a438",
             workflow,
         )
@@ -111,7 +110,7 @@ class WorkbenchAcceptanceTests(unittest.TestCase):
     def test_quality_action_installs_exact_candidate_without_network_resolution(self):
         action = (
             Path(__file__).parents[1]
-            / ".github/actions/run-quality-profile/action.yml"
+            / ".github/actions/run-quality-profile/profile-steps.yml"
         ).read_text(encoding="utf-8")
         self.assertIn('"${candidates[0]}"', action)
         self.assertIn("--no-deps", action)

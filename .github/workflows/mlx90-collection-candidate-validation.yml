@@ -50,7 +50,7 @@ jobs:
       - name: Checkout exact protected producer source for registry selection
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
-          repository: lightning-it/ansible-collection-supplementary
+          repository: ltn-it/ansible-collection-supplementary
           ref: ${{ steps.context.outputs.source-sha }}
           path: source
           persist-credentials: false
@@ -89,7 +89,7 @@ jobs:
         with:
           client-id: ${{ vars.RELEASE_AUTOMATION_APP_CLIENT_ID }}
           private-key: ${{ secrets.RELEASE_AUTOMATION_APP_PRIVATE_KEY }}
-          owner: lightning-it
+          owner: ltn-it
           repositories: ansible-collection-supplementary
           permission-actions: read
       - name: Retrieve exact tested dependency bundle without rebuilding candidate
@@ -103,9 +103,9 @@ jobs:
           set -euo pipefail
           test "$APP_INSTALLATION" = 148019054
           test "$APP_SLUG" = lightning-it-release-automation
-          gh run download "$SOURCE_RUN" --repo lightning-it/ansible-collection-supplementary \
+          gh run download "$SOURCE_RUN" --repo ltn-it/ansible-collection-supplementary \
             --name "release-stage-$SOURCE_RUN-$SOURCE_ATTEMPT" --dir .candidate-control/stage
-          gh api "repos/lightning-it/ansible-collection-supplementary/actions/runs/$SOURCE_RUN" \
+          gh api "repos/ltn-it/ansible-collection-supplementary/actions/runs/$SOURCE_RUN" \
             > .candidate-control/producer-run.json
       - name: Read the configured Nexus candidate and verify exact bytes
         env:
@@ -143,10 +143,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
-          repository: lightning-it/ansible-collection-supplementary
+          repository: ltn-it/ansible-collection-supplementary
           ref: ${{ needs.validate.outputs.source-sha }}
           persist-credentials: false
-      - uses: lightning-it/modulix-validation/.github/actions/run-quality-profile@c2a251041b121e59809b06e158b52dc6df81a0a3
+      - uses: ltn-it/modulix-validation/.github/actions/run-quality-profile@c2a251041b121e59809b06e158b52dc6df81a0a3
         with:
           profile: heavy
           scenario: ${{ matrix.scenario }}
@@ -175,10 +175,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
-          repository: lightning-it/ansible-collection-supplementary
+          repository: ltn-it/ansible-collection-supplementary
           ref: ${{ needs.validate.outputs.source-sha }}
           persist-credentials: false
-      - uses: lightning-it/modulix-validation/.github/actions/run-quality-profile@c2a251041b121e59809b06e158b52dc6df81a0a3
+      - uses: ltn-it/modulix-validation/.github/actions/run-quality-profile@c2a251041b121e59809b06e158b52dc6df81a0a3
         with:
           profile: application_acceptance
           scenario: ${{ matrix.scenario }}
@@ -223,7 +223,7 @@ jobs:
           set -euo pipefail
           gh api --paginate --slurp \
             "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" \
-            --jq '[.[].jobs[]]' > .candidate-control/jobs.json
+            | jq '[.[].jobs[]]' > .candidate-control/jobs.json
           WUNDER_DEVTOOLS_WORKSPACE_MODE=rw scripts/wunder-devtools-ee.sh \
             python3 scripts/collection_candidate_receiver.py receipt \
             --request-id "$REQUEST_ID" --controller-sha "$CONTROLLER_SHA"

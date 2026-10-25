@@ -8,7 +8,6 @@ from pathlib import Path
 
 import yaml
 
-
 ROOT = Path(__file__).resolve().parents[1]
 ACTION_DIR = ROOT / ".github/actions/run-quality-profile"
 PHASE_SCRIPT = ACTION_DIR / "run-phase.sh"
@@ -66,8 +65,8 @@ class QualityPhaseTimeoutTests(unittest.TestCase):
             self.assertIn("destroy-completed", log.read_text(encoding="utf-8"))
 
     def test_action_gives_test_capture_and_destroy_separate_budgets(self):
-        action = yaml.safe_load((ACTION_DIR / "action.yml").read_text(encoding="utf-8"))
-        steps = {step.get("id"): step for step in action["runs"]["steps"]}
+        action = yaml.safe_load((ACTION_DIR / "profile-steps.yml").read_text(encoding="utf-8"))
+        steps = {step.get("id"): step for step in action["steps"]}
         expected = {"molecule": ("test", 1800), "cleanup": ("cleanup", 600), "destroy": ("destroy", 600)}
         for step_id, (phase, seconds) in expected.items():
             self.assertIn(
