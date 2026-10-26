@@ -98,7 +98,46 @@ class QualityTimeoutCancellationTests(unittest.TestCase):
             self.assertFalse((cell / "control/result.json").exists())
             self.assertFalse((cell / "package").exists())
 
-    def exercise(self, *, signum=signal.SIGINT, repeat=False, hang="test", early_exit=False):
+    def test_persistently_vanished_inventory_is_bounded_and_cannot_start_finalizers(self):
+        module = self.load_driver()
+        module.PROCESS_STOP_SECONDS = 0.03
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cell = root / "cell"
+            (cell / "tmp").mkdir(parents=True)
+            (cell / "tmp/state").write_text("private-owned-state")
+            steps = [{"id": "molecule", "run": ":"},
+                     {"id": "cleanup", "if": "always()", "run": f"touch {root / 'capture'}"},
+                     {"id": "destroy", "if": "always()", "run": f"touch {root / 'destroy'}"}]
+            started = time.monotonic()
+            with (mock.patch.object(module, "process_identity", return_value=None),
+                  self.assertRaises(module.ProcessQuiescenceError)):
+                module.execute_owned_cell(steps, {}, dict(os.environ), root / "control", root, cell)
+            self.assertLess(time.monotonic() - started, 2)
+            self.assertFalse((root / "capture").exists())
+            self.assertFalse((root / "destroy").exists())
+            self.assertEqual("private-owned-state", (cell / "tmp/state").read_text())
+            context = cell / "recovery/context.json"
+            self.assertEqual(0o700, context.parent.stat().st_mode & 0o777)
+            self.assertEqual(0o600, context.stat().st_mode & 0o777)
+            self.assertFalse((cell / "control/result.json").exists())
+            self.assertFalse((cell / "package").exists())
+
+    def test_first_terminal_observation_requires_rescan_but_stable_terminal_is_quiescent(self):
+        module = self.load_driver()
+        process = mock.Mock(pid=123)
+        # A first observed zombie can have forked after the directory listing;
+        # a second identical terminal birth cannot fork again and must not spin.
+        snapshot = ({}, {(456, "terminal-birth")}, False)
+        with (mock.patch.object(module, "owned_session_members", return_value=snapshot) as scan,
+              mock.patch.object(module, "signal_owned_member") as send):
+            self.assertFalse(module.stop_owned_process(process))
+        self.assertEqual(2, scan.call_count)
+        process.wait.assert_called_once()
+        send.assert_not_called()
+
+    def exercise(self, *, signum=signal.SIGINT, repeat=False, hang="test", early_exit=False,
+                 fork_handoff=False, prepare_timeout_phase=""):
         root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         environment = {key: value for key, value in os.environ.items()
                        if key not in {"GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE"}}
@@ -123,10 +162,17 @@ class QualityTimeoutCancellationTests(unittest.TestCase):
             "import json,os,pathlib,signal,time\n"
             "root=pathlib.Path(os.environ['FIXTURE_ROOT'])\n"
             "signal.signal(signal.SIGTERM,signal.SIG_IGN)\n"
-            "data={'pid':os.getpid(),'pgid':os.getpgrp(),'sid':os.getsid(0),"
+            "def record():\n"
+            " data={'pid':os.getpid(),'pgid':os.getpgrp(),'sid':os.getsid(0),"
             "'birth':pathlib.Path('/proc/self/stat').read_text().split()[21]}\n"
-            "with (root/'pids').open('a') as stream: stream.write(json.dumps(data)+'\\n')\n"
+            " with (root/'pids').open('a') as stream: stream.write(json.dumps(data)+'\\n')\n"
+            "record()\n"
             "(root/'active').touch()\n"
+            "if os.environ.get('FIXTURE_FORK_HANDOFF')=='1':\n"
+            " while not (root/'fork-release').exists(): time.sleep(0.005)\n"
+            " if os.fork(): os._exit(0)\n"
+            " record()\n"
+            " (root/'handoff-child').touch()\n"
             "while True: time.sleep(0.02)\n"
         )
         molecule = binary / "molecule"
@@ -137,6 +183,7 @@ class QualityTimeoutCancellationTests(unittest.TestCase):
             "args=sys.argv[1:]\n"
             "while args[0]=='--base-config': args=args[2:]\n"
             "phase=args[0]\n"
+            "if phase==os.environ.get('FIXTURE_PREP_TIMEOUT'): time.sleep(30)\n"
             "def active():\n"
             " for line in (root/'pids').read_text().splitlines() if (root/'pids').exists() else []:\n"
             "  data=json.loads(line); path=pathlib.Path('/proc',str(data['pid']),'stat')\n"
@@ -165,18 +212,62 @@ class QualityTimeoutCancellationTests(unittest.TestCase):
         if "test" not in hang.split(","):
             # Enter cancellation during a real finalizer: it must not be retried.
             steps[0]["run"] = 'echo exit_code=0 >> "$GITHUB_OUTPUT"'
+        hook = (
+            "original_iterdir=pathlib.Path.iterdir\n"
+            "def handoff_inventory(path):\n"
+            " paths=list(original_iterdir(path))\n"
+            " if path==pathlib.Path('/proc') and not (root/'fork-release').exists():\n"
+            "  sid=json.loads((root/'pids').read_text().splitlines()[0])['sid']\n"
+            "  members=[p for p in paths if p.name.isdecimal() and "
+            "(identity:=module.process_identity(p)) is not None and identity[1]==sid]\n"
+            "  (root/'fork-release').touch()\n"
+            "  deadline=time.monotonic()+3\n"
+            "  while (not (root/'handoff-child').exists() or any("
+            "(identity:=module.process_identity(p)) is not None and identity[0] not in {'Z','X'} "
+            "for p in members)):\n"
+            "   assert time.monotonic()<deadline,'pipeline parents did not finish the real fork handoff'\n"
+            "   time.sleep(0.005)\n"
+            "  child=json.loads((root/'pids').read_text().splitlines()[-1])['pid']\n"
+            "  assert str(child) not in {p.name for p in paths},'new child was already in the old listing'\n"
+            "  (root/'handoff-proof').write_text(json.dumps({'old_listing_misses_child':True,"
+            "'parent_chain_exited':True,'actual_timeout_tee':True}))\n"
+            " return iter(paths)\n"
+            "pathlib.Path.iterdir=handoff_inventory\n"
+        ) if fork_handoff else ""
         program = (
-            "import importlib.util,os,pathlib\n"
+            "import importlib.util,json,os,pathlib,time\n"
             f"spec=importlib.util.spec_from_file_location('cell',{str(ACTION / 'run-cell.py')!r})\n"
             "module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)\n"
-            "module.PROCESS_STOP_SECONDS=0.15\n"
-            "module.CANCEL_FINALIZER_SECONDS=2\n"
+            f"module.PROCESS_STOP_SECONDS={0.4 if fork_handoff else 0.15}\n"
+            "module.CANCEL_FINALIZER_SECONDS=5\n"
             f"root=pathlib.Path({str(root)!r})\n"
+            "original_run=module.run_owned_process\n"
+            "def traced_run(command,workspace,environment,cancellation):\n"
+            " started=time.monotonic(); code=None; error=None\n"
+            " phase=pathlib.Path(environment['GITHUB_OUTPUT']).stem\n"
+            " if phase in {'cleanup','destroy'} and (root/'pids').exists():\n"
+            "  for line in (root/'pids').read_text().splitlines():\n"
+            "   data=json.loads(line); path=pathlib.Path('/proc',str(data['pid']),'stat')\n"
+            "   if path.exists():\n"
+            "    fields=path.read_text().split()\n"
+            "    if fields[21]==data['birth'] and fields[2] not in {'Z','X'}: (root/'entry-overlap').touch()\n"
+            " try:\n"
+            "  code=original_run(command,workspace,environment,cancellation); return code\n"
+            " except BaseException as caught:\n"
+            "  error=type(caught).__name__; raise\n"
+            " finally:\n"
+            "  trace={'phase':pathlib.Path(environment['GITHUB_OUTPUT']).stem,'code':code,"
+            "'error':error,'seconds':round(time.monotonic()-started,3)}\n"
+            "  with (root/'phase-trace').open('a') as stream: stream.write(json.dumps(trace)+'\\n')\n"
+            "module.run_owned_process=traced_run\n"
+            f"{hook}"
             f"raise SystemExit(module.execute_owned_cell({steps!r},{{}},dict(os.environ),"
             "root/'control',root,root/'cell'))\n"
         )
         environment.update({"PATH": f"{binary}:{environment['PATH']}", "TMPDIR": str(root),
                             "FIXTURE_ROOT": str(root), "FIXTURE_HANG": hang,
+                            "FIXTURE_FORK_HANDOFF": str(int(fork_handoff)),
+                            "FIXTURE_PREP_TIMEOUT": prepare_timeout_phase,
                             "FIXTURE_EARLY": str(int(early_exit)), "QUALITY_SCENARIO": "fixture",
                             "QUALITY_LOG_PATH": str(root / "molecule.log"),
                             "QUALITY_INCUS_PROJECT": "owned-fixture"})
@@ -198,9 +289,21 @@ class QualityTimeoutCancellationTests(unittest.TestCase):
                     time.sleep(0.03)
                     os.kill(controller.pid, signal.SIGTERM)
                     os.kill(controller.pid, signal.SIGINT)
-            stdout, stderr = controller.communicate(timeout=10)
+            stdout, stderr = controller.communicate(timeout=20)
+            trace = (root / "phase-trace").read_text() if (root / "phase-trace").exists() else "no phase trace"
+            diagnostics = stdout + stderr + "\n" + trace
+            if os.environ.get("QUALITY_TEST_TRACE") == "1":
+                print(trace, flush=True)
             self.assertIsNone(foreign.poll(), "unrelated process was signalled")
+            self.assertFalse((root / "entry-overlap").exists(), diagnostics)
+            outcomes = [json.loads(line) for line in trace.splitlines()]
+            expected_phases = ["molecule", "cleanup", "destroy"] + (["evidence"] if signum is None else [])
+            self.assertEqual(expected_phases, [row["phase"] for row in outcomes], diagnostics)
             records = [json.loads(line) for line in (root / "pids").read_text().splitlines()]
+            if fork_handoff:
+                self.assertEqual(2, len(records))
+                self.assertEqual({"old_listing_misses_child": True, "parent_chain_exited": True,
+                                  "actual_timeout_tee": True}, json.loads((root / "handoff-proof").read_text()))
             self.assertTrue(records)
             self.assertTrue(all(item["sid"] != item["pgid"] for item in records),
                             "fixture must use the actual separate GNU timeout process group")
@@ -209,9 +312,12 @@ class QualityTimeoutCancellationTests(unittest.TestCase):
                 path = Path(f"/proc/{item['pid']}/stat")
                 self.assertTrue(not path.exists() or path.read_text().split()[2] == "Z",
                                 "timeout-owned worker survived the controller")
-            self.assertEqual(["test", "cleanup", "destroy"] if "test" in hang.split(",") else
-                             ["cleanup", "destroy"], (root / "calls").read_text().splitlines(),
-                             stdout + stderr)
+            expected = ["test", "cleanup", "destroy"] if "test" in hang.split(",") else ["cleanup", "destroy"]
+            if prepare_timeout_phase:
+                expected.remove(prepare_timeout_phase)
+                self.assertEqual(124, next(row["code"] for row in outcomes
+                                          if row["phase"] == prepare_timeout_phase), diagnostics)
+            self.assertEqual(expected, (root / "calls").read_text().splitlines(), diagnostics)
             if signum is not None:
                 self.assertEqual(128 + signum, controller.returncode, stdout + stderr)
                 self.assertFalse((cell / "control/result.json").exists())
@@ -219,7 +325,7 @@ class QualityTimeoutCancellationTests(unittest.TestCase):
                 self.assertEqual(1 if early_exit else 0, controller.returncode, stdout + stderr)
                 publication = json.loads((cell / "control/result.json").read_text())
                 self.assertEqual(not early_exit, publication["success"])
-            if hang != "test":
+            if hang != "test" or prepare_timeout_phase:
                 self.assertTrue((cell / "tmp/state").is_file())
                 self.assertTrue((cell / "recovery/context.json").is_file())
             else:
@@ -268,6 +374,21 @@ class QualityTimeoutCancellationTests(unittest.TestCase):
 
     def test_cancelled_destroy_timeout_stops_group_and_retains_state(self):
         self.exercise(hang="test,destroy")
+
+    def test_fork_after_listing_and_parent_exit_cannot_overlap_finalizers(self):
+        self.exercise(fork_handoff=True)
+
+    def test_sigterm_fork_handoff_cannot_leave_a_missed_child(self):
+        self.exercise(fork_handoff=True, signum=signal.SIGTERM)
+
+    def test_repeated_signals_during_fork_handoff_still_stop_child(self):
+        self.exercise(fork_handoff=True, repeat=True)
+
+    def test_zero_exit_fork_handoff_cannot_publish_success_with_a_missed_child(self):
+        self.exercise(fork_handoff=True, early_exit=True, signum=None)
+
+    def test_finalizer_timeout_before_molecule_effects_is_not_skipped_or_success(self):
+        self.exercise(prepare_timeout_phase="destroy")
 
 
 if __name__ == "__main__":

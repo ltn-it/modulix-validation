@@ -129,6 +129,8 @@ def process_identity(path):
 def owned_session_members(session):
     """GNU timeout changes process group but remains in our fresh session."""
     members = {}
+    terminal = set()
+    vanished = False
     try:
         paths = list(Path("/proc").iterdir())
     except OSError as error:
@@ -137,9 +139,16 @@ def owned_session_members(session):
         if not path.name.isdecimal():
             continue
         identity = process_identity(path)
-        if identity is not None and identity[1] == session and identity[0] not in {"Z", "X"}:
-            members[int(path.name)] = identity
-    return members
+        if identity is None:
+            # Its session is now unknown: it might have forked an owned child
+            # after this directory listing, so an empty scan is not proof.
+            vanished = True
+        elif identity[1] == session:
+            if identity[0] in {"Z", "X"}:
+                terminal.add((int(path.name), identity[2]))
+            else:
+                members[int(path.name)] = identity
+    return members, terminal, vanished
 
 
 def stop_owned_process(process):
@@ -148,19 +157,33 @@ def stop_owned_process(process):
     A group-only kill misses GNU timeout's separate group. Check each process
     birth and session before signalling so foreign processes and reused PIDs
     are never selected. Repeat the inventory to include concurrent forks. A
-    zombie cannot perform effects; anything else still live after KILL blocks
-    subsequent capture/destroy and retains the existing private recovery state.
+    zombie cannot perform effects, but its first observation can hide a child
+    born after the listing. Vanished entries have unknown session membership.
+    Neither permits quiescence until another complete scan includes their
+    possible children. Persistent inventory uncertainty after the stop budget
+    blocks capture/destroy and preserves the existing private recovery state.
     """
     stopped = False
+    known_terminal = set()
+
+    def inventory():
+        # Reap our own exited parent before listing; already terminal orphans
+        # can remain until their independent reaper collects them.
+        process.poll()
+        members, terminal, vanished = owned_session_members(process.pid)
+        unsettled = vanished or bool(terminal - known_terminal)
+        known_terminal.update(terminal)
+        return members, unsettled
+
     for signum in (signal.SIGTERM, signal.SIGKILL):
         deadline = time.monotonic() + PROCESS_STOP_SECONDS
         signalled = set()
         while True:
-            members = owned_session_members(process.pid)
-            if not members:
+            members, unsettled = inventory()
+            if not members and not unsettled:
                 process.wait(timeout=PROCESS_STOP_SECONDS)
                 return stopped
-            stopped = True
+            stopped |= bool(members)
             for pid, identity in members.items():
                 key = (pid, identity[2])
                 if key not in signalled:
@@ -169,8 +192,9 @@ def stop_owned_process(process):
             if time.monotonic() >= deadline:
                 break
             time.sleep(0.01)
-    if owned_session_members(process.pid):
-        raise ProcessQuiescenceError("owned phase remains active after bounded stop")
+    members, unsettled = inventory()
+    if members or unsettled:
+        raise ProcessQuiescenceError("owned phase quiescence unconfirmed after bounded stop")
     process.wait(timeout=PROCESS_STOP_SECONDS)
     return stopped
 
