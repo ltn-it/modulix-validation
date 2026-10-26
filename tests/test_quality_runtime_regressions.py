@@ -66,8 +66,13 @@ class QualityRuntimeRegressions(unittest.TestCase):
             incus.chmod(0o755)
             # Capacity is a separate preflight contract; give this VM capability
             # regression deterministic sufficient disk and client memory.
+            df = root / "df"
+            df.write_text("#!/bin/sh\nsleep 0.05\nprintf 'fixture disk output\\n'\n")
+            df.chmod(0o755)
             awk = root / "awk"
-            awk.write_text("#!/bin/sh\nprintf '20971520\\n'\n")
+            # Drain a piped df before exiting; otherwise pipefail can observe
+            # df's SIGPIPE and fail the VM test before remote admission.
+            awk.write_text("#!/bin/sh\nif [ \"$#\" -eq 1 ]; then cat >/dev/null; fi\nprintf '20971520\\n'\n")
             awk.chmod(0o755)
             (root / "scripts").mkdir()
             (root / "scripts/prune_stale_incus_resources.py").write_text("")
