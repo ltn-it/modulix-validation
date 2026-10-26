@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -35,6 +36,86 @@ INPUTS = (
     "memory-limit",
     "disk-limit",
 )
+
+# Cancellation has a smaller fixed finalization budget than a normal phase.
+# Expiry retains the private host-backed state for an owner-driven recovery.
+CANCEL_FINALIZER_SECONDS = 120
+PROCESS_STOP_SECONDS = 2
+OWNED_FINALIZERS = {"cleanup", "destroy"}
+
+
+class CellCancelled(KeyboardInterrupt):
+    def __init__(self, signum, results=None):
+        super().__init__("quality cell cancelled")
+        self.signum = signum
+        self.results = results or {}
+
+
+class Cancellation:
+    def __enter__(self):
+        self.signum = None
+        self.active = None
+        self.finalizing = False
+        self.previous = {kind: signal.getsignal(kind) for kind in (signal.SIGINT, signal.SIGTERM)}
+        for kind in self.previous:
+            signal.signal(kind, self.request)
+        return self
+
+    def request(self, signum, _frame):
+        first = self.signum is None
+        self.signum = self.signum or signum
+        # Between steps (including process creation), record the request and
+        # inspect it before another ordinary effect. During owned finalizers,
+        # defer repeated signals to their fixed timeout instead of skipping them.
+        if first and self.active is not None and not self.finalizing:
+            raise CellCancelled(self.signum)
+
+    def __exit__(self, *_error):
+        for kind, previous in self.previous.items():
+            signal.signal(kind, previous)
+
+
+def stop_owned_process(process):
+    """Stop only the new session created for this exact phase, descendants too."""
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        process.wait(timeout=PROCESS_STOP_SECONDS)
+    except subprocess.TimeoutExpired:
+        pass
+    # A shell can exit while a descendant ignores TERM. The owned session must
+    # also be gone before a finalizer starts against the same lifecycle state.
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    process.wait(timeout=PROCESS_STOP_SECONDS)
+
+
+def run_owned_process(command, workspace, environment, cancellation):
+    process = None
+    try:
+        process = subprocess.Popen(
+            ["/bin/bash", "-e", "-c", command], cwd=workspace,
+            env=environment, start_new_session=True,
+        )
+        cancellation.active = process
+        if cancellation.signum and not cancellation.finalizing:
+            raise CellCancelled(cancellation.signum)
+        timeout = CANCEL_FINALIZER_SECONDS if cancellation.finalizing else None
+        try:
+            return process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            stop_owned_process(process)
+            return 124
+    except BaseException:
+        if process is not None:
+            stop_owned_process(process)
+        raise
+    finally:
+        cancellation.active = None
 
 
 def private_values(path: Path, *, environment: bool = False) -> dict[str, str]:
@@ -92,54 +173,124 @@ def run_steps(
     workspace: Path,
 ):
     """Preserve normal step failure and unconditional finalizers inside one container."""
-    control.mkdir(mode=0o700, parents=True, exist_ok=True)
     results = {}
     failed = False
     environment_file = control / "environment"
     admitted_environment = dict(environment)
+    identities = set()
     for step in steps:
         identity = step["id"]
-        if identity in results or step.get("if") not in (None, "always()"):
+        if (not isinstance(identity, str) or not re.fullmatch(r"[a-z][a-z0-9-]*", identity)
+                or identity in identities or step.get("if") not in (None, "always()")):
             raise ValueError("invalid cell step identity or condition")
-        if failed and step.get("if") != "always()":
-            results[identity] = {"outcome": "skipped", "outputs": {}}
-            continue
-        output = control / f"{identity}.output"
-        damaged = False
-        try:
-            admitted_environment.update(
-                private_values(environment_file, environment=True)
-            )
-        except (OSError, ValueError):
-            # A damaged command file must not prevent an owned finalizer from
-            # using the last successfully admitted identity and paths.
-            failed = True
-            damaged = True
-        if damaged and step.get("if") != "always()":
-            results[identity] = {"outcome": "failure", "outputs": {}}
-            continue
-        local = {
-            **admitted_environment,
-            "GITHUB_ENV": str(environment_file),
-            "GITHUB_OUTPUT": str(output),
-        }
-        try:
-            for key, value in step.get("env", {}).items():
-                local[key] = expand(str(value), inputs, results)
-            command = expand(step["run"], inputs, results)
-            result = subprocess.run(
-                ["/bin/bash", "-e", "-c", command],
-                cwd=workspace,
-                env=local,
-                check=False,
-            )
-            outcome = "success" if result.returncode == 0 and not damaged else "failure"
-            outputs = private_values(output)
-        except (OSError, ValueError, KeyError):
-            outcome, outputs = "failure", {}
-        results[identity] = {"outcome": outcome, "outputs": outputs}
-        failed |= outcome != "success"
+        identities.add(identity)
+    with Cancellation() as cancellation:
+        control.mkdir(mode=0o700, parents=True, exist_ok=True)
+        for step in steps:
+            identity = step["id"]
+            always = step.get("if") == "always()"
+            cancelled = cancellation.signum is not None
+            if (failed and not always) or (cancelled and (not always or identity not in OWNED_FINALIZERS)):
+                results[identity] = {"outcome": "skipped", "outputs": {}}
+                continue
+            output = control / f"{identity}.output"
+            damaged = False
+            try:
+                admitted_environment.update(private_values(environment_file, environment=True))
+            except (OSError, ValueError):
+                failed, damaged = True, True
+            if damaged and not always:
+                results[identity] = {"outcome": "failure", "outputs": {}}
+                continue
+            local = {**admitted_environment, "GITHUB_ENV": str(environment_file), "GITHUB_OUTPUT": str(output)}
+            try:
+                for key, value in step.get("env", {}).items():
+                    local[key] = expand(str(value), inputs, results)
+                command = expand(step["run"], inputs, results)
+                cancellation.finalizing = cancelled
+                code = run_owned_process(command, workspace, local, cancellation)
+                outcome = "success" if code == 0 and not damaged else "failure"
+                outputs = private_values(output)
+            except KeyboardInterrupt as error:
+                cancellation.signum = cancellation.signum or getattr(error, "signum", signal.SIGINT)
+                outcome, outputs = "failure", {}
+            except (OSError, ValueError, KeyError):
+                outcome, outputs = "failure", {}
+            results[identity] = {"outcome": outcome, "outputs": outputs}
+            failed |= outcome != "success"
+        if cancellation.signum:
+            raise CellCancelled(cancellation.signum, results)
     return results
+
+
+def finalizers_confirmed(results):
+    return all(
+        results.get(name, {}).get("outcome") == "success"
+        and results.get(name, {}).get("outputs", {}).get("exit_code") == "0"
+        for name in OWNED_FINALIZERS
+    )
+
+
+def finish_owned_state(cell, inputs, environment, results, *, cancelled):
+    """Keep unconfirmed teardown state on the existing private host-backed cell."""
+    if finalizers_confirmed(results):
+        for name in ("tmp", "artifacts"):
+            path = cell / name
+            if path.exists():
+                shutil.rmtree(path)
+        return
+    recovery = cell / "recovery"
+    recovery.mkdir(mode=0o700)
+    # Never copy RAM-only command files, generated passwords or TLS material.
+    # The immutable source and run tuple can reconstruct ownership while the
+    # existing private lifecycle and diagnostic paths remain in place.
+    payload = {
+        "schema": 1,
+        "status": "teardown-unconfirmed",
+        "cancelled": cancelled,
+        "repository": environment.get("GITHUB_REPOSITORY"),
+        "workflow": environment.get("GITHUB_WORKFLOW"),
+        "run_id": environment.get("GITHUB_RUN_ID"),
+        "run_attempt": environment.get("GITHUB_RUN_ATTEMPT"),
+        "project": environment.get("QUALITY_INCUS_PROJECT"),
+        "source_sha": inputs.get("source-sha"),
+        "profile": inputs.get("profile"),
+        "scenario": inputs.get("scenario"),
+        "target": inputs.get("target"),
+        "private_state": [name for name in ("tmp", "artifacts") if (cell / name).exists()],
+        "capture_confirmed": results.get("cleanup", {}).get("outcome") == "success"
+            and results.get("cleanup", {}).get("outputs", {}).get("exit_code") == "0",
+        "destroy_confirmed": results.get("destroy", {}).get("outcome") == "success"
+            and results.get("destroy", {}).get("outputs", {}).get("exit_code") == "0",
+    }
+    descriptor = os.open(recovery / "context.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        json.dump(payload, stream, sort_keys=True)
+        stream.write("\n")
+
+
+def execute_owned_cell(steps, inputs, environment, control, workspace, cell):
+    """Finalize owned resources before disposal; cancellation is never success."""
+    try:
+        results = run_steps(steps, inputs, environment, control, workspace)
+    except CellCancelled as error:
+        finish_owned_state(cell, inputs, environment, error.results, cancelled=True)
+        return 128 + error.signum
+    except BaseException:
+        finish_owned_state(cell, inputs, environment, {}, cancelled=True)
+        raise
+    finish_owned_state(cell, inputs, environment, results, cancelled=False)
+    codes = (("molecule", "exit_code"), ("cleanup", "exit_code"),
+             ("destroy", "exit_code"), ("evidence", "exit_code"))
+    success = all(result["outcome"] == "success" for result in results.values())
+    success &= all(results[name]["outputs"].get(key) == "0" for name, key in codes)
+    final_environment = private_values(control / "environment", environment=True)
+    publication = {"schema": 1, "result_artifact": final_environment.get("QUALITY_RESULT_ARTIFACT", ""),
+                   "package_directory": "/quality/package", "success": success}
+    result_root = cell / "control"
+    result_root.mkdir(mode=0o700)
+    (result_root / "result.json").write_text(json.dumps(publication, sort_keys=True) + "\n")
+    return 0 if success else 1
 
 
 def validate_transport(
@@ -345,7 +496,7 @@ def main() -> int:
         raise ValueError("quality output requires its own writable cell mount")
     if any(
         (Path("/quality") / name).exists()
-        for name in ("control", "artifacts", "package")
+        for name in ("control", "tmp", "artifacts", "package", "recovery")
     ):
         raise ValueError(
             "quality cell output is not fresh; previous evidence cannot be reused"
@@ -389,35 +540,9 @@ def main() -> int:
     # Command files contain generated secrets; keep them in the isolated home
     # tmpfs, never in the host-mounted evidence or output directory.
     control = Path("/tmp/wunder/quality-control")
-    try:
-        results = run_steps(steps, inputs, environment, control, Path("/workspace"))
-    finally:
-        # The admitted cell was fresh and exclusively owned. Preserve only the
-        # packaged redacted result, after target capture and owned destruction.
-        for path in (Path("/quality/tmp"), Path("/quality/artifacts")):
-            if path.exists():
-                shutil.rmtree(path)
-    codes = (
-        ("molecule", "exit_code"),
-        ("cleanup", "exit_code"),
-        ("destroy", "exit_code"),
-        ("evidence", "exit_code"),
+    return execute_owned_cell(
+        steps, inputs, environment, control, Path("/workspace"), Path("/quality")
     )
-    success = all(result["outcome"] == "success" for result in results.values())
-    success &= all(results[name]["outputs"].get(key) == "0" for name, key in codes)
-    final_environment = private_values(control / "environment", environment=True)
-    publication = {
-        "schema": 1,
-        "result_artifact": final_environment.get("QUALITY_RESULT_ARTIFACT", ""),
-        "package_directory": "/quality/package",
-        "success": success,
-    }
-    result_root = Path("/quality/control")
-    result_root.mkdir(mode=0o700)
-    (result_root / "result.json").write_text(
-        json.dumps(publication, sort_keys=True) + "\n"
-    )
-    return 0 if success else 1
 
 
 if __name__ == "__main__":

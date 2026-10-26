@@ -159,8 +159,13 @@ The launcher supplies only the declared action inputs, bound GitHub run
 identities, necessary runner metadata and private runtime paths. Neither a
 host home nor a Docker socket nor GitHub command-file directories are mounted.
 The complete cell keeps generated masked secrets and private command files in
-the isolated `/tmp/wunder` home tmpfs. After owned capture and destruction, raw
-cell state is removed; only the redacted package and nonsecret result survive.
+the isolated `/tmp/wunder` home tmpfs. Raw cell state is removed only after both
+capture and owned destruction return confirmed success. Otherwise the existing
+private host-backed `/quality/tmp` and `/quality/artifacts` remain available.
+The additional `/quality/recovery/context.json` records only run, source,
+project and target identities, with directory mode 0700 and file mode 0600.
+RAM command files, generated passwords and Incus TLS material are never copied
+there. Recovery is outside the redacted package and upload path.
 Its private environment file cannot replace PATH, HOME, Incus configuration,
 image identity, command-file paths or launcher-owned UID bindings. The central
 dispatcher accepts only the fixed result schema from `/quality/control/result.json`,
@@ -182,8 +187,9 @@ Its only other remote is `images`, with exactly
 `public: true`, so the registry's `images:ubuntu/24.04` reference resolves
 without inheriting a global client configuration. Foreign image servers and
 additional remote keys fail closed in both admission and execution.
-The VM phase queries `quality:/1.0` and requires the server's `qemu` driver;
-the Devtools client does not receive a local KVM device or privileged mode.
+VM execution remains deferred until the producer has a qualified remote-aware
+lifecycle. The current context admits containers and rejects VM inputs before
+candidate or infrastructure effects.
 Its exact remote keys are `addr`, `auth_type: tls`, `project`, `protocol: incus`
 and `public: false`, following the
 [pinned Incus schema](https://github.com/lxc/incus/blob/01f81e5e607bbb5818410318e4b3496ad1820824/shared/cliconfig/remote.go).
@@ -203,6 +209,13 @@ The test phase retains its 1800-second limit, followed by unconditional
 600-second evidence capture and 600-second owned destruction, with the existing
 30-second kill grace. A failed or timed-out phase cannot become a successful
 receipt input. Diagnostics precede destruction; lifecycle and evidence failures
-remain independently fatal. Runner-loss recovery still requires the established
+remain independently fatal. Catchable SIGINT/SIGTERM cancellation stops the
+active phase's owned process group, including its descendants, before running
+the exact capture and destroy finalizers. On cancellation each finalizer has
+a 120-second bound; stopping a process uses a two-second TERM grace before KILL.
+Repeated signals defer to those bounds. A destroy interrupted after an uncertain
+effect is not retried. Cancellation never publishes a successful result or
+artifact output; unconfirmed capture or destruction preserves private recovery
+state through container exit. Runner-loss recovery still requires the established
 ownership-aware stale-resource collector; a container lifetime is not proof of
 cleanup after runner loss.
