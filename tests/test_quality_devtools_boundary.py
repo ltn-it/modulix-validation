@@ -16,6 +16,33 @@ ACTION = ROOT / ".github/actions/run-quality-profile"
 
 
 class QualityDevtoolsBoundaryTests(unittest.TestCase):
+    def test_vm_rejected_by_actual_first_step_before_dispatch_and_candidate_download(self):
+        action = yaml.safe_load((ACTION / "action.yml").read_text())
+        check = action["runs"]["steps"][0]
+        download_index = next(i for i, step in enumerate(action["runs"]["steps"])
+                              if step.get("uses", "").startswith("actions/download-artifact@"))
+        self.assertGreater(download_index, 0)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            controller = root / ".github/actions/run-quality-profile"
+            controller.mkdir(parents=True)
+            (controller / "run-devtools.sh").write_bytes((ACTION / "run-devtools.sh").read_bytes())
+            (root / "scripts").mkdir()
+            marker = root / "dispatched"
+            (root / "scripts/wunder-devtools-ee.sh").write_text(
+                "#!/bin/sh\n# WUNDER_DEVTOOLS_QUALITY_CONTEXT: protected-incus-v1\n"
+                f"touch '{marker}'\n")
+            context = root / "context"
+            context.mkdir(mode=0o700)
+            environment = {**os.environ, "QUALITY_INPUT_INSTANCE_TYPE": "vm",
+                           "QUALITY_ACTION_ROOT": str(controller), "QUALITY_INCUS_CONFIG_DIR": str(context)}
+            for mode in ("check", "run"):
+                result = subprocess.run(["bash", str(controller / "run-devtools.sh"), mode],
+                                        env=environment, capture_output=True, text=True, check=False)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("VM", result.stderr)
+                self.assertFalse(marker.exists())
+
     def test_preflight_and_run_forward_same_complete_native_action_context(self):
         action = yaml.safe_load((ACTION / "action.yml").read_text())
         check = action["runs"]["steps"][0]
@@ -63,6 +90,7 @@ class QualityDevtoolsBoundaryTests(unittest.TestCase):
                 "github.sha": "b" * 40,
             }
             inputs = {name: "fixture-" + name for name in action["inputs"]}
+            inputs["instance-type"] = "container"
             contexts.update({"inputs." + name: value for name, value in inputs.items()})
             forwarded = {key: contexts[value.removeprefix("${{ ").removesuffix(" }}")] for key, value in check["env"].items()}
             result = subprocess.run(
@@ -136,6 +164,7 @@ class QualityDevtoolsBoundaryTests(unittest.TestCase):
                     "GITHUB_WORKSPACE": str(ROOT),
                     "GITHUB_OUTPUT": str(root / "output"),
                     "QUALITY_INCUS_CONFIG_DIR": "",
+                    "QUALITY_INPUT_INSTANCE_TYPE": "container",
                 },
                 capture_output=True,
                 text=True,
@@ -172,6 +201,7 @@ class QualityDevtoolsBoundaryTests(unittest.TestCase):
                     "GITHUB_WORKSPACE": str(root),
                     "QUALITY_ACTION_ROOT": str(action_root),
                     "QUALITY_INCUS_CONFIG_DIR": str(root / "transport"),
+                    "QUALITY_INPUT_INSTANCE_TYPE": "container",
                 },
                 capture_output=True,
                 text=True,

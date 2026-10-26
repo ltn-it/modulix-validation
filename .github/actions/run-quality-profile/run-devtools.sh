@@ -4,6 +4,14 @@ set -euo pipefail
 
 fail_closed() { printf 'Error: %s\n' "$1" >&2; exit 1; }
 case "${1:-}" in check|run) ;; *) fail_closed 'expected check or run' ;; esac
+# The current producer's shared create playbook requires local KVM for VMs.
+# This remote client has no devices. Deny before artifact download, dispatch,
+# stale-resource cleanup or installation until a remote-aware lifecycle exists.
+case "${QUALITY_INPUT_INSTANCE_TYPE:-}" in
+  container) ;;
+  vm) fail_closed 'VM inputs require a qualified remote-aware producer lifecycle; activation remains deferred' ;;
+  *) fail_closed 'unsupported quality instance type' ;;
+esac
 [ -n "${QUALITY_INCUS_CONFIG_DIR:-}" ] \
   || fail_closed 'approved Incus transport is unavailable; runtime activation remains deferred'
 [ -d "$QUALITY_INCUS_CONFIG_DIR" ] && [ ! -L "$QUALITY_INCUS_CONFIG_DIR" ] \

@@ -15,9 +15,9 @@ ACTION = ROOT / ".github/actions/run-quality-profile"
 
 
 class QualityConnectionContractTests(unittest.TestCase):
-    def fixture(self, root, addition=None):
+    def fixture(self, root, addition=None, scenario="fixture"):
         subprocess.run(["git", "init", "--quiet", str(root)], check=True, capture_output=True)
-        config = root / "molecule/fixture/molecule.yml"
+        config = root / "molecule" / scenario / "molecule.yml"
         config.parent.mkdir(parents=True, exist_ok=True)
         value = {"driver": {"name": "default"}, "platforms": [{"name": "offline-instance"}],
                  "provisioner": {"name": "ansible"}, "verifier": {"name": "ansible"}}
@@ -26,6 +26,28 @@ class QualityConnectionContractTests(unittest.TestCase):
         base = root / ".config/molecule/config.yml"
         base.parent.mkdir(parents=True, exist_ok=True)
         base.write_text("prerun: false\nrole_name_check: 0\nshared_state: false\n")
+
+    def test_every_admitted_name_reaches_actual_phase_configuration(self):
+        names = ("Keycloak.26", "keycloak_ci", "1keycloak", "A" + "x" * 62)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in names:
+                self.fixture(root, scenario=name)
+                for phase in ("test", "cleanup", "destroy"):
+                    with self.subTest(name=name, phase=phase):
+                        private = root / (name + "-" + phase)
+                        private.mkdir(mode=0o700)
+                        result = subprocess.run(
+                            ["python3", str(ACTION / "run-cell.py"), "--molecule-phase", phase, str(private)],
+                            cwd=root, env={**os.environ, "QUALITY_SCENARIO": name,
+                                           "QUALITY_INCUS_PROJECT": "bound-test-project"},
+                            capture_output=True, text=True, check=False)
+                        self.assertEqual(0, result.returncode, result.stderr)
+                        argv = (private / "argv").read_bytes().decode().split("\0")[:-1]
+                        self.assertEqual(name, argv[argv.index("-s") + 1])
+                        self.assertEqual(phase, argv[5])
+                        values = json.loads((private / "incus-vars.json").read_bytes())
+                        self.assertEqual({"ansible_incus_remote": "quality", "ansible_incus_project": "bound-test-project"}, values)
 
     def test_every_phase_supplies_private_vars_to_real_incus_connection_builder(self):
         with tempfile.TemporaryDirectory() as directory:

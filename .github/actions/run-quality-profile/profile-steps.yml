@@ -120,6 +120,13 @@ steps:
     run: |
       set -euo pipefail
 
+      # Defense in depth for this phase: the native adapter rejects VM inputs
+      # before downloading a candidate. Never infer lifecycle support from qemu.
+      if [ "${KEYCLOAK_TEST_INSTANCE_TYPE:-}" != "container" ]; then
+        echo "VM or unknown inputs require a qualified remote-aware producer lifecycle" >&2
+        exit 1
+      fi
+
       command -v ansible-galaxy
       command -v incus
       command -v molecule
@@ -136,17 +143,6 @@ steps:
       memory_kib="$(awk '/MemAvailable/ {print $2}' /proc/meminfo)"
       test "$available_kib" -ge 10485760
       test "$memory_kib" -ge 4194304
-      if [ "$KEYCLOAK_TEST_INSTANCE_TYPE" = "vm" ]; then
-        # The bound remote runs the VM; the isolated Devtools client has no KVM device.
-        incus query quality:/1.0 | python3 -c '
-      import json, sys
-      server = json.load(sys.stdin)
-      driver = server.get("environment", {}).get("driver", "")
-      if not isinstance(driver, str) or "qemu" not in [part.strip() for part in driver.split("|")]:
-          raise SystemExit("approved remote Incus server does not advertise the qemu driver")
-      '
-      fi
-
       checksum_file="${QUALITY_CANDIDATE_ROOT}/candidate-SHA256SUMS"
       test -s "$checksum_file"
       (

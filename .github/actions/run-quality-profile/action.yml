@@ -23,7 +23,7 @@ inputs:
     description: Resolved Incus image.
     required: true
   instance-type:
-    description: Incus instance type.
+    description: Container only; VMs reject before candidate effects until a remote-aware producer lifecycle is qualified.
     required: true
   candidate-artifact:
     description: Name of the exact collection candidate artifact.

@@ -10,6 +10,15 @@ checks proceed under the owner's workflow-first decision. Runtime activation,
 Nexus/Galaxy cutover and operational acceptance remain later work under
 LI-371/LI-118; code presence is not an operational or release-eligible result.
 
+The modern device-free remote quality context currently admits containers only.
+VM inputs are rejected in the first action step, before candidate download,
+dispatcher effects, cleanup or installation. The current Collection producer's
+Heavy create playbook imports a shared lifecycle that requires readable and
+writable localhost `/dev/kvm`; remote qemu capability does not satisfy that
+contract. VM/Heavy acceptance remains open until a coordinated remote-aware
+producer lifecycle is qualified. No host device or privilege is forwarded, no
+VM silently becomes a container, and the standalone legacy supplier is unchanged.
+
 The request adapter validates canonical compact JSON and its SHA-256 before
 using request fields. It rejects duplicate keys, unexpected fields, boolean
 integer substitutions, unsafe names, foreign identities, human action counts,

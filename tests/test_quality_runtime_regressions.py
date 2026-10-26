@@ -34,7 +34,7 @@ class QualityRuntimeRegressions(unittest.TestCase):
             )
         self.assertNotEqual(0, result.returncode)
 
-    def test_vm_preflight_uses_bound_remote_server_before_candidate_install(self):
+    def test_container_preflight_does_not_infer_vm_lifecycle_support(self):
         steps = yaml.safe_load((ACTION / "profile-steps.yml").read_text())["steps"]
         phase = next(step for step in steps if step.get("id") == "phase-3")
         with tempfile.TemporaryDirectory() as directory:
@@ -64,7 +64,7 @@ class QualityRuntimeRegressions(unittest.TestCase):
                 'if [ "$1" = query ]; then printf "%s\\n" "$SERVER_METADATA"; fi\n'
             )
             incus.chmod(0o755)
-            # Capacity is a separate preflight contract; give this VM capability
+            # Capacity is a separate preflight contract; give this container
             # regression deterministic sufficient disk and client memory.
             df = root / "df"
             df.write_text("#!/bin/sh\nsleep 0.05\nprintf 'fixture disk output\\n'\n")
@@ -76,13 +76,9 @@ class QualityRuntimeRegressions(unittest.TestCase):
             awk.chmod(0o755)
             (root / "scripts").mkdir()
             (root / "scripts/prune_stale_incus_resources.py").write_text("")
-            # The actual phase must work without exposing the client's /dev/kvm.
+            # An ordinary container does not need a qemu capability query.
             for metadata, expected in (
-                ({"environment": {"driver": "lxc | qemu"}}, 0),
-                ({"environment": {"driver": "lxc"}}, 1),
-                ({"environment": {"driver": "not-qemu"}}, 1),
-                ({"metadata": {"environment": {"driver": "qemu"}}}, 1),
-                ({}, 1),
+                ({}, 0),
             ):
                 with self.subTest(metadata=metadata):
                     calls.unlink(missing_ok=True)
@@ -90,7 +86,7 @@ class QualityRuntimeRegressions(unittest.TestCase):
                     result = subprocess.run(
                         ["bash", "-c", phase["run"]], cwd=root,
                         env={**os.environ, "PATH": f"{root}:{os.environ['PATH']}",
-                             "KEYCLOAK_TEST_INSTANCE_TYPE": "vm", "RUNNER_TEMP": str(root),
+                             "KEYCLOAK_TEST_INSTANCE_TYPE": "container", "RUNNER_TEMP": str(root),
                              "GITHUB_REPOSITORY": "ltn-it/modulix-validation", "GITHUB_RUN_ID": "123",
                              "INCUS_CALLS": str(calls), "SERVER_METADATA": json.dumps(metadata),
                              "QUALITY_CANDIDATE_ROOT": str(candidate), "QUALITY_INSTALL_ROOT": str(root / "installed"),
@@ -98,8 +94,26 @@ class QualityRuntimeRegressions(unittest.TestCase):
                         capture_output=True, text=True, check=False,
                     )
                     self.assertEqual(expected, int(result.returncode != 0), result.stderr)
-                    self.assertIn("query quality:/1.0", calls.read_text())
+                    self.assertNotIn("query quality:/1.0", calls.read_text())
                     self.assertEqual(expected == 0, installed.exists())
+
+    def test_vm_profile_rejects_before_any_process_cleanup_or_install(self):
+        steps = yaml.safe_load((ACTION / "profile-steps.yml").read_text())["steps"]
+        phase = next(step for step in steps if step.get("id") == "phase-3")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            marker = root / "called"
+            for command in ("python3", "incus", "molecule", "ansible-galaxy"):
+                script = root / command
+                script.write_text(f"#!/bin/sh\ntouch '{marker}'\nexit 99\n")
+                script.chmod(0o755)
+            result = subprocess.run(["bash", "-c", phase["run"]], cwd=root,
+                                    env={**os.environ, "PATH": f"{root}:{os.environ['PATH']}",
+                                         "KEYCLOAK_TEST_INSTANCE_TYPE": "vm"},
+                                    capture_output=True, text=True, check=False)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("VM", result.stderr)
+            self.assertFalse(marker.exists())
 
 
 if __name__ == "__main__":

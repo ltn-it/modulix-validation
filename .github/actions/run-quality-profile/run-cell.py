@@ -279,7 +279,7 @@ def prepare_molecule_phase(phase: str, directory: Path) -> None:
     if (
         phase not in {"test", "cleanup", "destroy"}
         or not re.fullmatch(r"[a-z][a-z0-9-]{0,62}", project)
-        or not re.fullmatch(r"[a-z][a-z0-9-]{0,62}", scenario)
+        or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,62}", scenario)
         or os.environ.get("MOLECULE_ANSIBLE_ARGS_STRICT_MODE")
     ):
         raise ValueError("Molecule target or executor argument mode is not admitted")
