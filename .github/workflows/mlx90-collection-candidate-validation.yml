@@ -146,7 +146,7 @@ jobs:
           repository: ltn-it/ansible-collection-supplementary
           ref: ${{ needs.validate.outputs.source-sha }}
           persist-credentials: false
-      - uses: ltn-it/modulix-validation/.github/actions/run-quality-profile@5fb47a4d6c947c50f419c725442b7ab4fc87c686
+      - uses: ltn-it/modulix-validation/.github/actions/run-quality-profile@37ac05fb686ebab18fa3c49a063b51652773d866
         with:
           profile: heavy
           scenario: ${{ matrix.scenario }}
@@ -178,7 +178,7 @@ jobs:
           repository: ltn-it/ansible-collection-supplementary
           ref: ${{ needs.validate.outputs.source-sha }}
           persist-credentials: false
-      - uses: ltn-it/modulix-validation/.github/actions/run-quality-profile@5fb47a4d6c947c50f419c725442b7ab4fc87c686
+      - uses: ltn-it/modulix-validation/.github/actions/run-quality-profile@37ac05fb686ebab18fa3c49a063b51652773d866
         with:
           profile: application_acceptance
           scenario: ${{ matrix.scenario }}
