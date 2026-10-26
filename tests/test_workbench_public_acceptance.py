@@ -84,7 +84,7 @@ class WorkbenchAcceptanceTests(unittest.TestCase):
         self.assertIn('python-version: "3.11"', workflow)
         self.assertIn(
             "ltn-it/modulix-validation/.github/actions/run-quality-profile"
-            "@4b80722fbcc90da49dc2881facaea7dda3a2a438",
+            "@1492004c3053ebd90209f1aefe81d48e1402b205",
             workflow,
         )
         renovate = json.loads(
