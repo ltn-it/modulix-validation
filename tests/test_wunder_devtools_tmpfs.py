@@ -1,5 +1,6 @@
 # Managed by lightning-it/shared-assets-lit.
 
+import datetime
 import json
 import os
 import re
@@ -7,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -99,6 +101,29 @@ class ProtectedIncusContextTests(unittest.TestCase):
         self.workspace.mkdir(parents=True)
         self.runtime = self.root / "temp"
         self.runtime.mkdir(mode=0o700)
+        self.recovery = self.root / "persistent-private-recovery"
+        self.recovery.mkdir(mode=0o700)
+        self.custody = self.recovery / "custody.json"
+        self.policy = {
+            "schema": 1, "repository": "ltn-it/modulix-validation",
+            "runner": "isolated-fixture", "custodian": "fixture-only",
+            "persistent": True, "handoff_confirmed": True, "retention_seconds": 86400,
+            "expires_at": (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=2)).isoformat(),
+        }
+        self.custody.write_text(json.dumps(self.policy))
+        self.custody.chmod(0o600)
+        # Only the fixed host path is translated in the isolated copied unit.
+        # Actual fixed-path bind-mount/container/job-end proof is separate.
+        managed = self.root / "managed"
+        managed.mkdir()
+        self.wrapper = managed / WRAPPER.name
+        shutil.copy2(WRAPPER, self.wrapper)
+        helper = WRAPPER.with_name("wunder-devtools-quality-context.sh")
+        content = helper.read_text()
+        marker = "readonly recovery_root=/var/lib/lightning-it/modulix-recovery"
+        self.assertEqual(1, content.count(marker))
+        self.helper = managed / helper.name
+        self.helper.write_text(content.replace(marker, f"readonly recovery_root={self.recovery}"))
         self.action_sha = "a" * 40
         self.controller_sha = "b" * 40
         self.action = self.root / f"work/_actions/ltn-it/modulix-validation/{self.action_sha}/.github/actions/run-quality-profile"
@@ -146,19 +171,30 @@ class ProtectedIncusContextTests(unittest.TestCase):
             f" if path.is_relative_to({str(self.root)!r}) and path.stat().st_uid == {os.getuid()}:\n"
             f"  uid = {self.runner_uid}\n"
             "  if str(path) == os.environ.get('FIXTURE_FOREIGN_OWNER'): uid += 1\n"
+            f"  marker = pathlib.Path({str(self.root / 'runtime-foreign-owner')!r})\n"
+            "  if marker.exists() and str(path) == marker.read_text(): uid += 1\n"
             "  print(uid); raise SystemExit(0)\n"
             f"raise SystemExit(subprocess.run([{real_stat!r}, *args], check=False).returncode)\n"
         )
         metadata.chmod(0o755)
         engine = self.binary / "docker"
         engine.write_text(
-            "#!/usr/bin/env python3\nimport json, pathlib, sys\n"
+            "#!/usr/bin/env python3\nimport datetime,hashlib,json,pathlib,sys,time\n"
             f"trace = pathlib.Path({str(self.trace)!r})\n"
             "with trace.open('a') as stream: stream.write(json.dumps(sys.argv[1:]) + '\\n')\n"
             "args = sys.argv[1:]\n"
             "if args[0] == 'info': raise SystemExit(0)\n"
             "if 'QUALITY_CONTEXT_PHASE=preflight' in args:\n"
-            " print('PROTECTED_INCUS_PREFLIGHT=1'); raise SystemExit(0)\n"
+            " values=dict(args[i+1].split('=',1) for i,v in enumerate(args[:-1]) if v=='--env' and '=' in args[i+1])\n"
+            f" raw=pathlib.Path({str(self.custody)!r}).read_bytes(); policy=json.loads(raw)\n"
+            " expiry=int(min(time.time()+policy['retention_seconds'],datetime.datetime.fromisoformat(policy['expires_at']).timestamp()))\n"
+            " owner={'schema':1,'repository':values['GITHUB_REPOSITORY'],'run_id':values['GITHUB_RUN_ID'],\n"
+            " 'run_attempt':values['GITHUB_RUN_ATTEMPT'],'job':values['GITHUB_JOB'],'controller_sha':values['GITHUB_SHA'],\n"
+            " 'action_sha':values['QUALITY_ACTION_REF'],'source_sha':values['QUALITY_INPUT_SOURCE_SHA'],\n"
+            " 'profile':values['QUALITY_INPUT_PROFILE'],'scenario':values['QUALITY_INPUT_SCENARIO'],\n"
+            " 'target':values['QUALITY_INPUT_TARGET'],'created_at':int(time.time()),'expires_at':expiry,\n"
+            " 'custody_sha256':hashlib.sha256(raw).hexdigest()}\n"
+            " print('PROTECTED_INCUS_PREFLIGHT=1'); print(json.dumps(owner,sort_keys=True,separators=(',',':'))); print(expiry); raise SystemExit(0)\n"
             "for value in args:\n"
             " if 'destination=/quality' in value:\n"
             "  state = pathlib.Path(value.split('source=', 1)[1].split(',', 1)[0])\n"
@@ -191,6 +227,7 @@ class ProtectedIncusContextTests(unittest.TestCase):
             "GITHUB_WORKFLOW": "MLX-90 collection candidate validation",
             "GITHUB_WORKSPACE": str(self.workspace),
             "RUNNER_WORKSPACE": str(self.workspace.parent), "RUNNER_TEMP": str(self.runtime),
+            "RUNNER_NAME": "isolated-fixture",
             "GITHUB_OUTPUT": str(self.output),
             "QUALITY_ACTION_REPOSITORY": "ltn-it/modulix-validation",
             "QUALITY_ACTION_REF": self.action_sha,
@@ -213,7 +250,7 @@ class ProtectedIncusContextTests(unittest.TestCase):
 
     def invoke(self, mode="--quality-incus-v1", **changes):
         return subprocess.run(
-            ["/bin/bash", str(WRAPPER), mode, str(self.action)],
+            ["/bin/bash", str(self.wrapper), mode, str(self.action)],
             cwd=self.workspace, env={**self.environment, **changes},
             capture_output=True, text=True, check=False, timeout=10,
         )
@@ -243,6 +280,153 @@ class ProtectedIncusContextTests(unittest.TestCase):
         self.assertNotIn("GH_TOKEN", " ".join(runtime))
         self.assertNotIn(str(self.output), " ".join(runtime))
         self.assertEqual(2, len(self.output.read_text().splitlines()))
+
+    def test_unconfirmed_recovery_survives_runner_temp_job_cleanup(self):
+        original = self.engine.read_text()
+        anchor = "  (state/'control').mkdir(); (state/'package').mkdir()"
+        self.assertEqual(1, original.count(anchor))
+        self.engine.write_text(original.replace(
+            anchor,
+            "  (state/'tmp').mkdir(mode=0o700); (state/'tmp/state').write_text('private-owned-state')\n"
+            "  (state/'recovery').mkdir(mode=0o700)\n"
+            "  (state/'recovery/context.json').write_text('private-nonsecret-context')\n"
+            "  raise SystemExit(130)",
+        ))
+        self.assertNotEqual(0, self.invoke().returncode)
+        runtime = next(call for call in self.calls() if "QUALITY_CONTEXT_PHASE=runtime" in call)
+        mount = next(value for value in runtime if "destination=/quality" in value)
+        cell = Path(mount.split("source=", 1)[1].split(",", 1)[0])
+        self.assertEqual("", self.output.read_text())
+        shutil.rmtree(self.runtime)
+        self.assertEqual("private-owned-state", (cell / "tmp/state").read_text())
+        self.assertEqual("private-nonsecret-context", (cell / "recovery/context.json").read_text())
+
+    def test_recovery_admission_rejects_missing_binding_permissions_and_override(self):
+        original = self.custody.read_bytes()
+        for kind in ("missing", "permissive-root", "permissive-policy", "foreign-policy", "override"):
+            with self.subTest(kind=kind):
+                changes = {}
+                if kind == "missing":
+                    self.custody.unlink()
+                elif kind == "permissive-root":
+                    self.recovery.chmod(0o755)
+                elif kind == "permissive-policy":
+                    self.custody.chmod(0o644)
+                elif kind == "foreign-policy":
+                    changes["FIXTURE_FOREIGN_OWNER"] = str(self.custody)
+                else:
+                    changes["QUALITY_RECOVERY_ROOT"] = str(self.runtime)
+                try:
+                    result = self.invoke(**changes)
+                    self.assertNotEqual(0, result.returncode)
+                    self.assertEqual([], self.calls())
+                    self.assertEqual("", self.output.read_text())
+                finally:
+                    self.recovery.chmod(0o700)
+                    self.custody.write_bytes(original)
+                    self.custody.chmod(0o600)
+
+    def test_recovery_root_and_policy_links_reject_before_engine(self):
+        original = self.custody.read_bytes()
+        outside = self.root / "outside-policy"
+        outside.write_bytes(original)
+        outside.chmod(0o600)
+        for link in ("symlink", "hardlink"):
+            with self.subTest(link=link):
+                self.custody.unlink()
+                if link == "symlink":
+                    self.custody.symlink_to(outside)
+                else:
+                    os.link(outside, self.custody)
+                try:
+                    self.assertNotEqual(0, self.invoke().returncode)
+                    self.assertEqual([], self.calls())
+                finally:
+                    self.custody.unlink()
+                    self.custody.write_bytes(original)
+                    self.custody.chmod(0o600)
+        moved = self.root / "moved-recovery"
+        self.recovery.rename(moved)
+        self.recovery.symlink_to(moved, target_is_directory=True)
+        try:
+            self.assertNotEqual(0, self.invoke().returncode)
+            self.assertEqual([], self.calls())
+        finally:
+            self.recovery.unlink()
+            moved.rename(self.recovery)
+
+    def test_recovery_root_cannot_be_rendered_inside_runner_temp(self):
+        temporary = self.runtime / "not-persistent"
+        temporary.mkdir(mode=0o700)
+        shutil.copy2(self.custody, temporary / "custody.json")
+        self.helper.write_text(self.helper.read_text().replace(
+            f"readonly recovery_root={self.recovery}", f"readonly recovery_root={temporary}"))
+        result = self.invoke()
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("ephemeral", result.stderr)
+        self.assertEqual([], self.calls())
+
+    def test_private_cell_ownership_binds_run_and_matrix_without_secrets(self):
+        foreign = self.recovery / "quality-cell.foreign"
+        foreign.mkdir(mode=0o700)
+        marker = foreign / "ownership.json"
+        marker.write_text("not this run; preserve")
+        marker.chmod(0o600)
+        result = self.invoke()
+        self.assertEqual(0, result.returncode, result.stderr)
+        cells = [path for path in self.recovery.glob("quality-cell.*") if path != foreign]
+        self.assertEqual(1, len(cells))
+        cell = cells[0]
+        owner_path = cell / "ownership.json"
+        owner = json.loads(owner_path.read_text())
+        self.assertEqual("not this run; preserve", marker.read_text())
+        self.assertFalse(cell.is_relative_to(self.runtime))
+        self.assertEqual(0o700, cell.stat().st_mode & 0o777)
+        self.assertEqual(0o600, owner_path.stat().st_mode & 0o777)
+        for key, expected in {"repository": "ltn-it/modulix-validation", "run_id": "123",
+                              "run_attempt": "1", "job": "heavy", "controller_sha": self.controller_sha,
+                              "action_sha": self.action_sha, "source_sha": "c" * 40,
+                              "profile": "heavy", "scenario": "fixture", "target": "target"}.items():
+            self.assertEqual(expected, owner[key])
+        self.assertGreater(owner["expires_at"], owner["created_at"])
+        self.assertLessEqual(owner["expires_at"] - owner["created_at"], 86400)
+        for secret in ("PERSONAL_API_KEY", "GH_TOKEN", "client.key", "GITHUB_ENV"):
+            self.assertNotIn(secret, owner_path.read_text())
+
+    def test_runtime_lease_expiry_retains_state_and_never_publishes_success(self):
+        clock = self.binary / "date"
+        clock.write_text(f"#!/bin/sh\necho {int(time.time()) + 3 * 86400}\n")
+        clock.chmod(0o755)
+        result = self.invoke()
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("lease expired", result.stderr)
+        self.assertEqual("", self.output.read_text())
+        self.assertEqual(1, len(list(self.recovery.glob("quality-cell.*/ownership.json"))))
+
+    def test_changed_owner_or_custody_never_publishes_or_deletes_cell(self):
+        original = self.engine.read_text()
+        for command in (
+            "  (state/'ownership.json').write_text('foreign-owner')\n",
+            "  (state/'ownership.json').chmod(0o644)\n",
+            "  state.chmod(0o755)\n",
+            f"  pathlib.Path({str(self.root / 'runtime-foreign-owner')!r}).write_text(str(state))\n",
+            f"  pathlib.Path({str(self.root / 'runtime-foreign-owner')!r}).write_text(str(state/'ownership.json'))\n",
+            f"  pathlib.Path({str(self.root / 'runtime-foreign-owner')!r}).write_text({str(self.recovery)!r})\n",
+            f"  pathlib.Path({str(self.custody)!r}).write_text('changed-policy')\n",
+            f"  pathlib.Path({str(self.custody)!r}).chmod(0o644)\n",
+        ):
+            with self.subTest(command=command):
+                self.engine.write_text(original + command)
+                before = len(self.calls())
+                try:
+                    self.assertNotEqual(0, self.invoke().returncode)
+                    self.assertEqual(before + 2, len(self.calls()))
+                    self.assertEqual("", self.output.read_text())
+                    self.assertTrue(list(self.recovery.glob("quality-cell.*/ownership.json")))
+                finally:
+                    (self.root / "runtime-foreign-owner").unlink(missing_ok=True)
+                    self.custody.write_text(json.dumps(self.policy))
+                    self.custody.chmod(0o600)
 
     def test_root_runner_stops_before_any_engine_call(self):
         result = self.invoke(FIXTURE_RUNNER_UID="0")
@@ -338,7 +522,7 @@ class ProtectedIncusContextTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(1, len(self.calls()))
         self.assertEqual("", self.output.read_text())
-        self.assertEqual([], list(self.runtime.glob("quality-cell.*")))
+        self.assertEqual([], list(self.recovery.glob("quality-cell.*")))
 
     def test_unreadable_candidate_directory_stops_before_engine(self):
         blocked = self.candidate / "unreadable"
@@ -365,7 +549,7 @@ class ProtectedIncusContextTests(unittest.TestCase):
         try:
             result = self.invoke()
         finally:
-            for blocked in self.runtime.glob("quality-cell.*/package/unreadable"):
+            for blocked in self.recovery.glob("quality-cell.*/package/unreadable"):
                 blocked.chmod(0o700)
         self.assertIn("Permission denied", result.stderr)
         self.assertNotEqual(0, result.returncode)
@@ -397,13 +581,14 @@ class ProtectedIncusContextTests(unittest.TestCase):
 
     def test_failed_offline_preflight_does_not_create_cell_or_start_runtime(self):
         content = self.engine.read_text().replace(
-            "print('PROTECTED_INCUS_PREFLIGHT=1'); raise SystemExit(0)",
-            "print('required pinned tool unavailable: incus'); raise SystemExit(1)",
+            "if 'QUALITY_CONTEXT_PHASE=preflight' in args:\n",
+            "if 'QUALITY_CONTEXT_PHASE=preflight' in args:\n"
+            " print('required pinned tool unavailable: incus'); raise SystemExit(1)\n",
         )
         self.engine.write_text(content)
         self.assertNotEqual(0, self.invoke().returncode)
         self.assertEqual(1, len(self.calls()))
-        self.assertEqual([], list(self.runtime.glob("quality-cell.*")))
+        self.assertEqual([], list(self.recovery.glob("quality-cell.*")))
         self.assertEqual("", self.output.read_text())
 
     def test_unrecognized_container_result_never_becomes_host_output(self):
@@ -487,6 +672,7 @@ class ProtectedIncusContextTests(unittest.TestCase):
         result = self.invoke(mode="--quality-incus-v1-check")
         self.assertEqual(0, result.returncode, result.stderr)
         code = self.calls()[0][-1].replace("pathlib.Path('/incus')", f"pathlib.Path({str(self.context)!r})")
+        code = code.replace("pathlib.Path('/recovery-root')", f"pathlib.Path({str(self.recovery)!r})")
         subprocess.run(
             ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
              "-subj", "/CN=offline-fixture", "-keyout", str(self.context / "client.key"),
@@ -513,6 +699,21 @@ class ProtectedIncusContextTests(unittest.TestCase):
         program = "import unittest.mock as m\nwith m.patch('shutil.which', return_value='/fixture/tool'):\n exec(" + repr(code) + ")"
         def execute():
             return subprocess.run([sys.executable, "-c", program], env=self.environment, capture_output=True, text=True, check=False)
+        self.assertEqual(0, execute().returncode)
+        for mutation in (
+            {"schema": True}, {"repository": "foreign/repo"}, {"runner": "foreign-runner"},
+            {"custodian": ""}, {"persistent": 1}, {"handoff_confirmed": False},
+            {"handoff_confirmed": 1}, {"retention_seconds": True}, {"retention_seconds": 0},
+            {"retention_seconds": 86401}, {"expires_at": "2000-01-01T00:00:00Z"},
+            {"unexpected": "reject"},
+        ):
+            with self.subTest(custody=mutation):
+                self.custody.write_text(json.dumps({**self.policy, **mutation}))
+                self.assertNotEqual(0, execute().returncode)
+        for invalid in ('{"schema":1,"schema":1}', 'NaN'):
+            self.custody.write_text(invalid)
+            self.assertNotEqual(0, execute().returncode)
+        self.custody.write_text(json.dumps(self.policy))
         self.assertEqual(0, execute().returncode)
         for mutation in ({"run_attempt": "2"}, {"server": "https://user:password@offline.invalid"}, {"expires_at": "2000-01-01T00:00:00Z"}):
             with self.subTest(mutation=mutation):

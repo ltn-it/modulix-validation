@@ -80,6 +80,21 @@ output=${GITHUB_OUTPUT:-}
 [[ $output == "$RUNNER_TEMP/_runner_file_commands/"* ]] || fail "output outside runner command directory"
 owned_file "$output"
 
+# Source-bound location; no caller override or temporary fallback. Provisioning
+# and the real custodian/storage approval are separate operating prerequisites.
+readonly recovery_root=/var/lib/lightning-it/modulix-recovery
+[[ -z ${QUALITY_RECOVERY_ROOT:-} ]] || fail "recovery root overrides are not admitted"
+safe_path "$recovery_root"
+[[ -d $recovery_root && $(stat -c %u -- "$recovery_root") == "$uid" &&
+   $(stat -c %a -- "$recovery_root") == 700 ]] || fail "approved private recovery root required"
+for transient in "$RUNNER_TEMP" "$RUNNER_WORKSPACE" "$(dirname -- "$RUNNER_WORKSPACE")/_actions"; do
+  [[ $recovery_root != "$transient" && $recovery_root != "$transient/"* ]] || fail "recovery root is ephemeral"
+done
+custody="$recovery_root/custody.json"
+owned_file "$custody"
+[[ $(stat -c %a -- "$custody") == 600 && $(stat -c %s -- "$custody") -le 4096 ]] || fail "private custody binding required"
+[[ ${RUNNER_NAME:-} =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || fail "bound runner identity required"
+
 input_names=(PROFILE SCENARIO TARGET TARGET_DISPOSITION ROLES IMAGE INSTANCE_TYPE CANDIDATE_ARTIFACT SOURCE_SHA JUNIT_REQUIRED ALLURE_REQUIRED CPU_LIMIT MEMORY_LIMIT DISK_LIMIT)
 for name in "${input_names[@]}"; do
   key="QUALITY_INPUT_$name" value=${!key:-}
@@ -124,10 +139,54 @@ base=(run --rm --read-only --cap-drop ALL --security-opt no-new-privileges=true 
   --env HOME=/tmp/wunder --env TMPDIR=/tmp/wunder --mount "type=bind,source=$context,destination=/incus,readonly")
 [[ ${WUNDER_CONTAINER_ENGINE:-docker} != podman ]] || base+=(--read-only-tmpfs=false)
 identity_env=()
-for key in GITHUB_REPOSITORY GITHUB_RUN_ID GITHUB_RUN_ATTEMPT; do identity_env+=(--env "$key=${!key}"); done
+for key in GITHUB_REPOSITORY GITHUB_RUN_ID GITHUB_RUN_ATTEMPT GITHUB_JOB GITHUB_SHA RUNNER_NAME QUALITY_ACTION_REF QUALITY_INPUT_SOURCE_SHA QUALITY_INPUT_PROFILE QUALITY_INPUT_SCENARIO QUALITY_INPUT_TARGET; do
+  identity_env+=(--env "$key=${!key}")
+done
 preflight=$(cat <<'PY'
-import datetime, json, os, pathlib, re, shutil, ssl, urllib.parse
+import datetime, hashlib, json, os, pathlib, re, shutil, ssl, stat, urllib.parse
 import yaml
+# This file is deliberately absent until a separately authorized custodian
+# provisions the actual persistent storage and accepts the bounded handoff.
+store = pathlib.Path('/recovery-root')
+policy_path = store/'custody.json'
+metadata = policy_path.lstat()
+assert stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1
+assert metadata.st_uid == os.getuid() and stat.S_IMODE(metadata.st_mode) == 0o600
+assert metadata.st_size <= 4096
+raw_policy = policy_path.read_bytes()
+def unique_fields(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError('duplicate custody field')
+        result[key] = value
+    return result
+def reject_constant(_value):
+    raise ValueError('nonfinite custody field')
+policy = json.loads(raw_policy, object_pairs_hook=unique_fields, parse_constant=reject_constant)
+assert set(policy) == {'schema','repository','runner','custodian','persistent','handoff_confirmed','retention_seconds','expires_at'}
+assert type(policy['schema']) is int and policy['schema'] == 1
+assert policy['repository'] == os.environ['GITHUB_REPOSITORY']
+assert policy['runner'] == os.environ['RUNNER_NAME']
+assert isinstance(policy['custodian'], str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}', policy['custodian'])
+assert policy['persistent'] is True and policy['handoff_confirmed'] is True
+# 24h is the local draft ceiling, not an operative default: an explicit
+# unexpired custody binding must supply the actual retention value.
+assert type(policy['retention_seconds']) is int and 0 < policy['retention_seconds'] <= 86400
+now = datetime.datetime.now(datetime.timezone.utc)
+custody_expiry = datetime.datetime.fromisoformat(policy['expires_at'].replace('Z','+00:00'))
+assert custody_expiry.tzinfo is not None and custody_expiry > now
+expires = int(min(custody_expiry.timestamp(), now.timestamp() + policy['retention_seconds']))
+assert expires > int(now.timestamp())
+ownership = {
+    'schema':1, 'repository':os.environ['GITHUB_REPOSITORY'],
+    'run_id':os.environ['GITHUB_RUN_ID'], 'run_attempt':os.environ['GITHUB_RUN_ATTEMPT'],
+    'job':os.environ['GITHUB_JOB'], 'controller_sha':os.environ['GITHUB_SHA'],
+    'action_sha':os.environ['QUALITY_ACTION_REF'], 'source_sha':os.environ['QUALITY_INPUT_SOURCE_SHA'],
+    'profile':os.environ['QUALITY_INPUT_PROFILE'], 'scenario':os.environ['QUALITY_INPUT_SCENARIO'],
+    'target':os.environ['QUALITY_INPUT_TARGET'], 'created_at':int(now.timestamp()),
+    'expires_at':expires, 'custody_sha256':hashlib.sha256(raw_policy).hexdigest(),
+}
 for command in ('incus', 'molecule', 'ansible', 'ansible-galaxy', 'python3', 'openssl', 'timeout', 'tar'):
     if not shutil.which(command):
         raise SystemExit('required pinned tool unavailable: ' + command)
@@ -158,11 +217,28 @@ tls = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 tls.load_cert_chain(str(root/'client.crt'), str(root/'client.key'))
 tls.load_verify_locations(cafile=str(root/'servercerts/quality.crt'))
 print('PROTECTED_INCUS_PREFLIGHT=1')
+print(json.dumps(ownership, sort_keys=True, separators=(',',':')))
+print(str(expires))
 PY
 )
-"${engine_env[@]}" "$engine" "${base[@]}" --network none --env QUALITY_CONTEXT_PHASE=preflight "${identity_env[@]}" "$image" python3 -c "$preflight"
+preflight_result=$("${engine_env[@]}" "$engine" "${base[@]}" --network none \
+  --mount "type=bind,source=$recovery_root,destination=/recovery-root,readonly" \
+  --env QUALITY_CONTEXT_PHASE=preflight "${identity_env[@]}" "$image" python3 -c "$preflight") || fail "offline admission failed"
+mapfile -t preflight_lines <<< "$preflight_result"
+[[ ${#preflight_lines[@]} == 3 && ${preflight_lines[0]} == PROTECTED_INCUS_PREFLIGHT=1 &&
+   ${#preflight_lines[1]} -le 4096 && ${preflight_lines[2]} =~ ^[1-9][0-9]{8,11}$ ]] || fail "invalid private custody receipt"
+ownership=${preflight_lines[1]} expires=${preflight_lines[2]}
+# Bind the checked policy bytes before creating the exclusively owned cell.
+policy_digest=$(sha256sum -- "$custody") || fail "custody binding unreadable"
+policy_digest=${policy_digest%% *}
+[[ $ownership == *"\"custody_sha256\":\"$policy_digest\""* ]] || fail "custody binding changed during admission"
 [[ $mode == --quality-incus-v1 ]] || exit 0
-cell=$(mktemp -d "$RUNNER_TEMP/quality-cell.XXXXXXXX")
+cell=$(mktemp -d "$recovery_root/quality-cell.$GITHUB_RUN_ID.$GITHUB_RUN_ATTEMPT.XXXXXXXX")
+safe_path "$cell"
+[[ $(stat -c %u -- "$cell") == "$uid" && $(stat -c %a -- "$cell") == 700 ]] || fail "private cell ownership mismatch"
+(set -o noclobber; printf '%s\n' "$ownership" > "$cell/ownership.json") || fail "exclusive ownership record failed"
+owned_file "$cell/ownership.json"
+[[ $(stat -c %a -- "$cell/ownership.json") == 600 ]] || fail "private ownership mode required"
 runtime_env=(--env QUALITY_CONTEXT_PHASE=runtime --env "QUALITY_DEVTOOLS_IMAGE=$image"
   --env "QUALITY_HOST_UID=$uid" --env "QUALITY_EFFECTIVE_UID=$uid" --env "QUALITY_EFFECTIVE_GID=$gid"
   --env INCUS_CONF=/incus --env RUNNER_TEMP=/quality/tmp --env GITHUB_WORKSPACE=/workspace
@@ -177,6 +253,20 @@ status=0
   --mount "type=bind,source=$action,destination=/controller,readonly" \
   --mount "type=bind,source=$cell,destination=/quality" \
   "${runtime_env[@]}" "$image" python3 /controller/run-cell.py || status=$?
+# Never discard unconfirmed state at expiry. Custodian/collector handling is
+# separate; missing/expired custody or tampered ownership cannot publish PASS.
+observed=$(date -u +%s) || fail "retention clock unavailable"
+[[ $observed =~ ^[1-9][0-9]{8,11}$ && $observed -lt $expires ]] || fail "recovery lease expired; private state retained"
+safe_path "$recovery_root"; safe_path "$cell"
+[[ -d $cell && $(stat -c %u -- "$cell") == "$uid" && $(stat -c %a -- "$cell") == 700 ]] || fail "cell privacy changed; private state retained"
+owned_file "$cell/ownership.json"
+[[ $(stat -c %a -- "$cell/ownership.json") == 600 ]] || fail "ownership mode changed; private state retained"
+printf '%s\n' "$ownership" | cmp -s -- "$cell/ownership.json" - || fail "ownership record changed; private state retained"
+owned_file "$custody"
+[[ $(stat -c %a -- "$custody") == 600 && $(stat -c %u -- "$recovery_root") == "$uid" &&
+   $(stat -c %a -- "$recovery_root") == 700 ]] || fail "custody permissions changed; private state retained"
+observed_policy=$(sha256sum -- "$custody") || fail "custody binding unreadable; private state retained"
+[[ ${observed_policy%% *} == "$policy_digest" ]] || fail "custody binding changed; private state retained"
 result="$cell/control/result.json"
 owned_file "$result"
 [[ $(stat -c %s -- "$result") -le 4096 && $(stat -c %a -- "$result") == 600 ]] || fail "invalid result file"
