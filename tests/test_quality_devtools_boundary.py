@@ -258,6 +258,8 @@ class QualityDevtoolsBoundaryTests(unittest.TestCase):
                 "LD_PRELOAD",
                 "QUALITY_DEVTOOLS_IMAGE",
                 "QUALITY_HOST_UID",
+                "QUALITY_INCUS_PROJECT",
+                "MOLECULE_ANSIBLE_ARGS_STRICT_MODE",
             ):
                 path.write_text(f"{key}=/untrusted\n")
                 with (
@@ -317,7 +319,7 @@ class QualityDevtoolsBoundaryTests(unittest.TestCase):
                 "GITHUB_RUN_ID": "123",
                 "GITHUB_RUN_ATTEMPT": "1",
             }
-            module.validate_transport(environment, root, now=now)
+            self.assertEqual(binding["project"], module.validate_transport(environment, root, now=now))
             for changed in (
                 {"run_attempt": "2"},
                 {"run_id": "124"},

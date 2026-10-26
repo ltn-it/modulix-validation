@@ -16,12 +16,10 @@ duration_seconds="$2"
 
 case "$phase" in
   test)
-    command=(molecule test -s "$QUALITY_SCENARIO" --destroy never)
     # The log is initialized here, including for a retry in the same workspace.
     log_mode=()
     ;;
   cleanup|destroy)
-    command=(molecule "$phase" -s "$QUALITY_SCENARIO")
     log_mode=(-a)
     ;;
   *)
@@ -29,6 +27,12 @@ case "$phase" in
     exit 2
     ;;
 esac
+
+private_directory="$(mktemp -d "${TMPDIR:-/tmp}/quality-incus-ansible.XXXXXX")" || exit 1
+trap 'rm -rf -- "$private_directory"' EXIT
+controller="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)" || exit 1
+python3 "$controller/run-cell.py" --molecule-phase "$phase" "$private_directory" || exit 1
+mapfile -d '' -t command < "$private_directory/argv"
 
 set +e
 timeout --signal=TERM --kill-after=30s "${duration_seconds}s" \

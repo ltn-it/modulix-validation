@@ -18,9 +18,19 @@ class QualityPhaseTimeoutTests(unittest.TestCase):
     def test_hung_test_records_timeout_and_later_phases_still_run(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            molecule = root / "molecule"
+            subprocess.run(["git", "init", "--quiet", str(root)], check=True, capture_output=True)
+            scenario = root / "molecule/fixture/molecule.yml"
+            scenario.parent.mkdir(parents=True)
+            scenario.write_text("driver: {name: default}\nplatforms: [{name: offline-instance}]\nprovisioner: {name: ansible}\n")
+            base = root / ".config/molecule/config.yml"
+            base.parent.mkdir(parents=True)
+            base.write_text("prerun: false\n")
+            bin_directory = root / "bin"
+            bin_directory.mkdir()
+            molecule = bin_directory / "molecule"
             molecule.write_text(
                 "#!/usr/bin/env bash\n"
+                "while [ \"$1\" = --base-config ]; do shift 2; done\n"
                 "printf '%s\\n' \"$1\" >> \"$MOLECULE_CALLS\"\n"
                 "if [ \"$1\" = test ]; then\n"
                 "  echo test-started\n"
@@ -36,7 +46,9 @@ class QualityPhaseTimeoutTests(unittest.TestCase):
             calls = root / "calls"
             env = {
                 **os.environ,
-                "PATH": f"{root}:{os.environ['PATH']}",
+                "PATH": f"{bin_directory}:{os.environ['PATH']}",
+                "QUALITY_INCUS_PROJECT": "bound-test-project",
+                "TMPDIR": directory,
                 "QUALITY_SCENARIO": "fixture",
                 "QUALITY_LOG_PATH": str(log),
                 "GITHUB_OUTPUT": str(output),
@@ -46,6 +58,7 @@ class QualityPhaseTimeoutTests(unittest.TestCase):
                 result = subprocess.run(
                     ["bash", str(PHASE_SCRIPT), phase, duration],
                     env=env,
+                    cwd=root,
                     capture_output=True,
                     text=True,
                     timeout=8,

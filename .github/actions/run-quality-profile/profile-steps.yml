@@ -305,9 +305,10 @@ steps:
       )
       PY
       {
-        echo "mode=pinned-devtools"
+        echo "mode=execution-environment"
         echo "image=$QUALITY_DEVTOOLS_IMAGE"
         echo "digest=${QUALITY_DEVTOOLS_IMAGE##*@}"
+        echo "reason=All quality phases execute in the managed digest-pinned Devtools image"
       } > "$dependency_root/execution-environment-digest.txt"
       python3 - <<'PY'
       import json

@@ -8,6 +8,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -55,6 +56,8 @@ def private_values(path: Path, *, environment: bool = False) -> dict[str, str]:
                 "QUALITY_HOST_UID",
                 "QUALITY_EFFECTIVE_UID",
                 "QUALITY_EFFECTIVE_GID",
+                "QUALITY_INCUS_PROJECT",
+                "MOLECULE_ANSIBLE_ARGS_STRICT_MODE",
             } or key.startswith("QUALITY_INPUT_"):
                 allowed = None
         else:
@@ -141,7 +144,7 @@ def run_steps(
 
 def validate_transport(
     environment: dict[str, str], config_root: Path, *, now: datetime | None = None
-) -> None:
+) -> str:
     """Require a later custodian-provisioned, run-bound TLS context; never discover access."""
     image = environment.get("QUALITY_DEVTOOLS_IMAGE", "")
     if not IMAGE.fullmatch(image):
@@ -263,6 +266,63 @@ def validate_transport(
     for name in ("client.crt", "client.key", "servercerts/quality.crt"):
         if not 0 < (config_root / name).stat().st_size <= 65536:
             raise ValueError("approved Incus TLS material is missing or oversized")
+    return binding["project"]
+
+
+def prepare_molecule_phase(phase: str, directory: Path) -> None:
+    """Carry the admitted target through the installed Molecule executor interface."""
+    from molecule import shell
+    from molecule.config import Config
+
+    project = os.environ.get("QUALITY_INCUS_PROJECT", "")
+    scenario = os.environ.get("QUALITY_SCENARIO", "")
+    if (
+        phase not in {"test", "cleanup", "destroy"}
+        or not re.fullmatch(r"[a-z][a-z0-9-]{0,62}", project)
+        or not re.fullmatch(r"[a-z][a-z0-9-]{0,62}", scenario)
+        or os.environ.get("MOLECULE_ANSIBLE_ARGS_STRICT_MODE")
+    ):
+        raise ValueError("Molecule target or executor argument mode is not admitted")
+    # Explicit -c replaces CLI discovery. Retain the actual installed CLI's
+    # selected defaults, including collection extensions or HOME when applicable.
+    defaults = next(p.default for p in shell.main.params if p.name == "base_config")
+    if not isinstance(defaults, (list, tuple)) or any(
+        not isinstance(path, str) for path in defaults
+    ):
+        raise ValueError("unsupported Molecule base configuration discovery")
+    source = Path("molecule") / scenario / "molecule.yml"
+    if not source.is_file():
+        raise ValueError("Molecule scenario configuration is absent")
+    args = {"base_config": list(defaults)}
+    configuration = Config(str(source), args=args)
+    provisioner = configuration.config["provisioner"]
+    ansible = configuration.config["ansible"]
+    if (
+        ansible["executor"]["args"].get("ansible_playbook")
+        or {"extra-vars", "e"} & set(provisioner.get("options", {}))
+        or ansible.get("env", {}).get("MOLECULE_ANSIBLE_ARGS_STRICT_MODE")
+    ):
+        raise ValueError("source Molecule arguments conflict with the admitted target")
+    variables = directory / "incus-vars.json"
+    overlay = directory / "molecule.yml"
+    executor_args = ["--extra-vars", "@" + str(variables)]
+    # The parent is a fresh private tmpfs directory; exclusive writes and the
+    # process umask keep the carrier out of Source and retained evidence.
+    with variables.open("x", encoding="utf-8") as stream:
+        json.dump({"ansible_incus_remote": "quality", "ansible_incus_project": project}, stream)
+    with overlay.open("x", encoding="utf-8") as stream:
+        yaml.safe_dump({"ansible": {"executor": {"args": {"ansible_playbook": executor_args}}}}, stream)
+    final = Config(str(source), args={"base_config": [*defaults, str(overlay)]})
+    if final.config["ansible"]["executor"]["args"]["ansible_playbook"] != executor_args:
+        raise ValueError("source Molecule configuration replaced the private target carrier")
+    command = ["molecule"]
+    for path in [*defaults, str(overlay)]:
+        command.extend(["--base-config", path])
+    command.extend([phase, "-s", scenario])
+    if phase == "test":
+        command.extend(["--destroy", "never"])
+    with (directory / "argv").open("xb") as stream:
+        stream.write(b"\0".join(part.encode() for part in command) + b"\0")
 
 
 def main() -> int:
@@ -302,7 +362,7 @@ def main() -> int:
     ):
         if shutil.which(command) is None:
             raise ValueError(f"required managed Devtools command is absent: {command}")
-    validate_transport(environment, Path("/incus"))
+    environment["QUALITY_INCUS_PROJECT"] = validate_transport(environment, Path("/incus"))
     inputs = {
         name: environment[f"QUALITY_INPUT_{name.upper().replace('-', '_')}"]
         for name in INPUTS
@@ -362,6 +422,12 @@ def main() -> int:
 
 if __name__ == "__main__":
     try:
-        raise SystemExit(main())
+        if len(sys.argv) == 4 and sys.argv[1] == "--molecule-phase":
+            os.umask(0o077)
+            prepare_molecule_phase(sys.argv[2], Path(sys.argv[3]))
+        elif len(sys.argv) == 1:
+            raise SystemExit(main())
+        else:
+            raise ValueError("unsupported private quality invocation")
     except (OSError, ValueError, KeyError, TypeError) as error:
         raise SystemExit(f"quality cell failed closed: {error}") from None
