@@ -10,6 +10,7 @@ import signal
 import stat
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -56,6 +57,7 @@ class Cancellation:
         self.signum = None
         self.active = None
         self.finalizing = False
+        self.stopping = False
         self.previous = {kind: signal.getsignal(kind) for kind in (signal.SIGINT, signal.SIGTERM)}
         for kind in self.previous:
             signal.signal(kind, self.request)
@@ -67,7 +69,7 @@ class Cancellation:
         # Between steps (including process creation), record the request and
         # inspect it before another ordinary effect. During owned finalizers,
         # defer repeated signals to their fixed timeout instead of skipping them.
-        if first and self.active is not None and not self.finalizing:
+        if first and self.active is not None and not self.finalizing and not self.stopping:
             raise CellCancelled(self.signum)
 
     def __exit__(self, *_error):
@@ -75,27 +77,107 @@ class Cancellation:
             signal.signal(kind, previous)
 
 
+class ProcessQuiescenceError(RuntimeError):
+    """An owned session could not be proven inactive; no later effect is safe."""
+
+
+def require_pidfd_signalling():
+    """Admit this kernel/runtime before ordinary effects; no numeric-PID fallback."""
+    if not callable(getattr(os, "pidfd_open", None)) or not callable(getattr(signal, "pidfd_send_signal", None)):
+        raise ProcessQuiescenceError("identity-bound process signalling unavailable")
+    descriptor = None
+    try:
+        descriptor = os.pidfd_open(os.getpid())
+        signal.pidfd_send_signal(descriptor, 0)
+    except OSError as error:
+        raise ProcessQuiescenceError("identity-bound process signalling unavailable") from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def signal_owned_member(pid, identity, signum):
+    descriptor = None
+    try:
+        descriptor = os.pidfd_open(pid)
+        # Revalidate after opening: a recycled PID must not acquire ownership.
+        # Recycling after this check cannot retarget the open kernel handle.
+        current = process_identity(Path("/proc") / str(pid))
+        if current is not None and current[1:] == identity[1:]:
+            signal.pidfd_send_signal(descriptor, signum)
+    except ProcessLookupError:
+        pass
+    except OSError as error:
+        raise ProcessQuiescenceError("cannot stop owned process") from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def process_identity(path):
+    try:
+        # comm may itself contain spaces and parentheses. The fields after its
+        # final ')' are state, ppid, pgrp, session, ... and starttime (index 19).
+        fields = (path / "stat").read_text().rpartition(") ")[2].split()
+        return fields[0], int(fields[3]), fields[19]
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    except (OSError, ValueError, IndexError) as error:
+        raise ProcessQuiescenceError("cannot inspect owned process state") from error
+
+
+def owned_session_members(session):
+    """GNU timeout changes process group but remains in our fresh session."""
+    members = {}
+    try:
+        paths = list(Path("/proc").iterdir())
+    except OSError as error:
+        raise ProcessQuiescenceError("owned process inventory unavailable") from error
+    for path in paths:
+        if not path.name.isdecimal():
+            continue
+        identity = process_identity(path)
+        if identity is not None and identity[1] == session and identity[0] not in {"Z", "X"}:
+            members[int(path.name)] = identity
+    return members
+
+
 def stop_owned_process(process):
-    """Stop only the new session created for this exact phase, descendants too."""
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-    try:
-        process.wait(timeout=PROCESS_STOP_SECONDS)
-    except subprocess.TimeoutExpired:
-        pass
-    # A shell can exit while a descendant ignores TERM. The owned session must
-    # also be gone before a finalizer starts against the same lifecycle state.
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
+    """Stop every live group in this phase's session and prove quiescence.
+
+    A group-only kill misses GNU timeout's separate group. Check each process
+    birth and session before signalling so foreign processes and reused PIDs
+    are never selected. Repeat the inventory to include concurrent forks. A
+    zombie cannot perform effects; anything else still live after KILL blocks
+    subsequent capture/destroy and retains the existing private recovery state.
+    """
+    stopped = False
+    for signum in (signal.SIGTERM, signal.SIGKILL):
+        deadline = time.monotonic() + PROCESS_STOP_SECONDS
+        signalled = set()
+        while True:
+            members = owned_session_members(process.pid)
+            if not members:
+                process.wait(timeout=PROCESS_STOP_SECONDS)
+                return stopped
+            stopped = True
+            for pid, identity in members.items():
+                key = (pid, identity[2])
+                if key not in signalled:
+                    signal_owned_member(pid, identity, signum)
+                    signalled.add(key)
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.01)
+    if owned_session_members(process.pid):
+        raise ProcessQuiescenceError("owned phase remains active after bounded stop")
     process.wait(timeout=PROCESS_STOP_SECONDS)
+    return stopped
 
 
 def run_owned_process(command, workspace, environment, cancellation):
     process = None
+    stopped = False
     try:
         process = subprocess.Popen(
             ["/bin/bash", "-e", "-c", command], cwd=workspace,
@@ -106,16 +188,22 @@ def run_owned_process(command, workspace, environment, cancellation):
             raise CellCancelled(cancellation.signum)
         timeout = CANCEL_FINALIZER_SECONDS if cancellation.finalizing else None
         try:
-            return process.wait(timeout=timeout)
+            code = process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            stop_owned_process(process)
-            return 124
-    except BaseException:
-        if process is not None:
-            stop_owned_process(process)
-        raise
+            code = 124
     finally:
-        cancellation.active = None
+        try:
+            # A successful shell exit can also leave timeout-owned children.
+            # Never start the next phase until this exact session is inactive.
+            if process is not None:
+                cancellation.stopping = True
+                stopped = stop_owned_process(process)
+        finally:
+            cancellation.stopping = False
+            cancellation.active = None
+    # A parent exiting zero while work is still active is not a completed
+    # phase. Even after stopping that work, never authorize a success receipt.
+    return 1 if code == 0 and stopped else code
 
 
 def private_values(path: Path, *, environment: bool = False) -> dict[str, str]:
@@ -184,6 +272,7 @@ def run_steps(
                 or identity in identities or step.get("if") not in (None, "always()")):
             raise ValueError("invalid cell step identity or condition")
         identities.add(identity)
+    require_pidfd_signalling()
     with Cancellation() as cancellation:
         control.mkdir(mode=0o700, parents=True, exist_ok=True)
         for step in steps:

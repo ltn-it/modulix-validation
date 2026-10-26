@@ -209,11 +209,19 @@ The test phase retains its 1800-second limit, followed by unconditional
 600-second evidence capture and 600-second owned destruction, with the existing
 30-second kill grace. A failed or timed-out phase cannot become a successful
 receipt input. Diagnostics precede destruction; lifecycle and evidence failures
-remain independently fatal. Catchable SIGINT/SIGTERM cancellation stops the
-active phase's owned process group, including its descendants, before running
-the exact capture and destroy finalizers. On cancellation each finalizer has
-a 120-second bound; stopping a process uses a two-second TERM grace before KILL.
-Repeated signals defer to those bounds. A destroy interrupted after an uncertain
+remain independently fatal. Catchable SIGINT/SIGTERM cancellation stops all
+live processes in the active phase's freshly created session, including the
+separate process group created by GNU `timeout`, before running the exact capture
+and destroy finalizers. Linux pidfd support is required before ordinary effects;
+there is no numeric-PID fallback or additional capability grant. Process identity
+and session membership are rechecked after opening the kernel handle, and signals
+use that handle so PID reuse cannot retarget them. Every phase, including one whose parent shell exits normally,
+must prove its session inactive before another phase starts. On cancellation each
+finalizer has a 120-second bound; stopping uses a two-second TERM grace followed
+by KILL and a two-second quiescence bound. Repeated signals defer during stopping
+and finalization. An unavailable process inventory or unconfirmed stop prevents
+further finalizer effects and retains private recovery without public outputs.
+Normal GNU timeout enforcement remains unchanged. A destroy interrupted after an uncertain
 effect is not retried. Cancellation never publishes a successful result or
 artifact output; unconfirmed capture or destruction preserves private recovery
 state through container exit. Runner-loss recovery still requires the established
