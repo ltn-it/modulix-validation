@@ -166,8 +166,15 @@ The context contains exactly `binding.json`, `config.yml`, `client.crt`,
 `repository`, `run_id`, `run_attempt`, `server`, `project`, and `expires_at` in
 addition to `schema`. Its identities match the actual current run; its expiry
 must be in the future and at most 90 minutes away. The Incus configuration
-contains only the authenticated HTTPS remote `quality`, selects it by default
+contains the authenticated HTTPS remote `quality`, selects it by default
 and binds the same server and project, with pre-provisioned server trust.
+Its only other remote is `images`, with exactly
+`addr: https://images.linuxcontainers.org`, `protocol: simplestreams`, and
+`public: true`, so the registry's `images:ubuntu/24.04` reference resolves
+without inheriting a global client configuration. Foreign image servers and
+additional remote keys fail closed in both admission and execution.
+The VM phase queries `quality:/1.0` and requires the server's `qemu` driver;
+the Devtools client does not receive a local KVM device or privileged mode.
 Its exact remote keys are `addr`, `auth_type: tls`, `project`, `protocol: incus`
 and `public: false`, following the
 [pinned Incus schema](https://github.com/lxc/incus/blob/01f81e5e607bbb5818410318e4b3496ad1820824/shared/cliconfig/remote.go).

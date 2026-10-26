@@ -274,6 +274,11 @@ class QualityDevtoolsBoundaryTests(unittest.TestCase):
             config = {
                 "default-remote": "quality",
                 "remotes": {
+                    "images": {
+                        "addr": "https://images.linuxcontainers.org",
+                        "protocol": "simplestreams",
+                        "public": True,
+                    },
                     "quality": {
                         "addr": "https://fixture.invalid:8443",
                         "project": "quality-fixture",
@@ -330,6 +335,20 @@ class QualityDevtoolsBoundaryTests(unittest.TestCase):
                     **config, "remotes": {"quality": {**remote, **changed}}
                 }))
                 with self.subTest(remote=changed), self.assertRaises(ValueError):
+                    module.validate_transport(environment, root, now=now)
+            (root / "config.yml").write_text(yaml.safe_dump(config))
+            for changed in (
+                {"addr": "https://foreign.invalid"},
+                {"public": False},
+                {"public": 1},
+                {"protocol": "incus"},
+                {"auth_type": "tls"},
+            ):
+                altered = {**config, "remotes": {
+                    **config["remotes"], "images": {**config["remotes"]["images"], **changed}
+                }}
+                (root / "config.yml").write_text(yaml.safe_dump(altered))
+                with self.subTest(images=changed), self.assertRaises(ValueError):
                     module.validate_transport(environment, root, now=now)
             (root / "config.yml").write_text(yaml.safe_dump(config))
             (root / "client.key").chmod(0o644)

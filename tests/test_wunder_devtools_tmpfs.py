@@ -454,7 +454,9 @@ class ProtectedIncusContextTests(unittest.TestCase):
         }
         (self.context / "binding.json").write_text(json.dumps(binding))
         (self.context / "config.yml").write_text(
-            "default-remote: quality\nremotes:\n  quality:\n"
+            "default-remote: quality\nremotes:\n"
+            "  images:\n    addr: https://images.linuxcontainers.org\n"
+            "    protocol: simplestreams\n    public: true\n  quality:\n"
             "    addr: https://offline.invalid:8443\n    project: quality-fixture\n"
             "    auth_type: tls\n    protocol: incus\n    public: false\n"
         )
@@ -477,6 +479,16 @@ class ProtectedIncusContextTests(unittest.TestCase):
                 self.assertNotEqual(0, execute().returncode)
         configuration.write_text(boolean_configuration)
         self.assertEqual(0, execute().returncode)
+        for original, changed in (
+            ("https://images.linuxcontainers.org", "https://foreign.invalid"),
+            ("protocol: simplestreams", "protocol: incus"),
+            ("public: true", "public: 1"),
+            ("public: true", "public: false"),
+        ):
+            with self.subTest(image_remote=changed):
+                configuration.write_text(boolean_configuration.replace(original, changed))
+                self.assertNotEqual(0, execute().returncode)
+        configuration.write_text(boolean_configuration)
         configuration.write_text(configuration.read_text().replace("auth_type:", "auth-type:"))
         self.assertNotEqual(0, execute().returncode)
 

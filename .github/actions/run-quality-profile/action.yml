@@ -107,11 +107,11 @@ runs:
 
     - name: Upload unique matrix evidence
       id: upload
-      if: always()
+      if: always() && steps.cell.outputs.package-directory != '' && steps.cell.outputs.result-artifact != ''
       uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6
       with:
         name: ${{ steps.cell.outputs.result-artifact }}
-        path: ${{ steps.cell.outputs.package-directory }}/
+        path: ${{ steps.cell.outputs.package-directory }}
         if-no-files-found: error
         retention-days: 30
 

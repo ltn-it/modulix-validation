@@ -239,7 +239,7 @@ def validate_transport(
     remote = configuration.get("remotes", {}).get("quality", {})
     if (
         configuration.get("default-remote") != "quality"
-        or set(configuration.get("remotes", {})) != {"quality"}
+        or set(configuration.get("remotes", {})) != {"quality", "images"}
         or not isinstance(remote, dict)
         or remote.get("addr") != binding["server"]
         or remote.get("project") != binding["project"]
@@ -250,6 +250,16 @@ def validate_transport(
         or not (config_root / "servercerts/quality.crt").is_file()
     ):
         raise ValueError("approved Incus remote, project or TLS trust differs")
+    images = configuration["remotes"]["images"]
+    if (
+        images != {
+            "addr": "https://images.linuxcontainers.org",
+            "protocol": "simplestreams",
+            "public": True,
+        }
+        or images["public"] is not True
+    ):
+        raise ValueError("approved public Incus image remote differs")
     for name in ("client.crt", "client.key", "servercerts/quality.crt"):
         if not 0 < (config_root / name).stat().st_size <= 65536:
             raise ValueError("approved Incus TLS material is missing or oversized")

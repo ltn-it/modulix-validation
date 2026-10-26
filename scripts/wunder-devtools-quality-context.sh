@@ -146,7 +146,10 @@ assert url.path in ('','/') and not url.query and not url.fragment
 assert isinstance(binding['project'], str) and re.fullmatch(r'[a-z][a-z0-9-]{0,62}', binding['project'])
 config = yaml.safe_load((root/'config.yml').read_text())
 assert set(config) == {'default-remote','remotes'} and config['default-remote'] == 'quality'
-assert set(config['remotes']) == {'quality'}
+assert set(config['remotes']) == {'quality', 'images'}
+images = config['remotes']['images']
+assert images == {'addr':'https://images.linuxcontainers.org', 'protocol':'simplestreams', 'public':True}
+assert images['public'] is True
 remote = config['remotes']['quality']
 assert set(remote) == {'addr','auth_type','project','protocol','public'}
 assert remote['public'] is False

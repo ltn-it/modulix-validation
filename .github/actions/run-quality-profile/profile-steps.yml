@@ -137,7 +137,14 @@ steps:
       test "$available_kib" -ge 10485760
       test "$memory_kib" -ge 4194304
       if [ "$KEYCLOAK_TEST_INSTANCE_TYPE" = "vm" ]; then
-        test -e /dev/kvm
+        # The bound remote runs the VM; the isolated Devtools client has no KVM device.
+        incus query quality:/1.0 | python3 -c '
+      import json, sys
+      server = json.load(sys.stdin)
+      driver = server.get("environment", {}).get("driver", "")
+      if not isinstance(driver, str) or "qemu" not in [part.strip() for part in driver.split("|")]:
+          raise SystemExit("approved remote Incus server does not advertise the qemu driver")
+      '
       fi
 
       checksum_file="${QUALITY_CANDIDATE_ROOT}/candidate-SHA256SUMS"
