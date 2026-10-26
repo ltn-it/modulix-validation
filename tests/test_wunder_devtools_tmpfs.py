@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -116,6 +117,39 @@ class ProtectedIncusContextTests(unittest.TestCase):
         self.trace = self.root / "engine.jsonl"
         self.binary = self.root / "bin"
         self.binary.mkdir()
+        # The generic rootless wrapper intentionally selects container UID 0.
+        # This protected-runner fixture models a non-root host independently
+        # of that outer test-container identity. Preserve real mode, link,
+        # size and traversal checks; translate only ownership of fixture files.
+        self.runner_uid = os.getuid() or 1001
+        self.runner_gid = os.getgid() if os.getuid() else 1001
+        real_id = shutil.which("id")
+        real_stat = shutil.which("stat")
+        self.assertIsNotNone(real_id)
+        self.assertIsNotNone(real_stat)
+        identity = self.binary / "id"
+        identity.write_text(
+            "#!/usr/bin/env python3\nimport os, subprocess, sys\n"
+            f"uid = os.environ.get('FIXTURE_RUNNER_UID', {str(self.runner_uid)!r})\n"
+            f"gid = {str(self.runner_gid)!r}\n"
+            "if sys.argv[1:] == ['-u']: print(uid)\n"
+            "elif sys.argv[1:] == ['-g']: print(gid)\n"
+            f"else: raise SystemExit(subprocess.run([{real_id!r}, *sys.argv[1:]], check=False).returncode)\n"
+        )
+        identity.chmod(0o755)
+        metadata = self.binary / "stat"
+        metadata.write_text(
+            "#!/usr/bin/env python3\nimport os, pathlib, subprocess, sys\n"
+            "args = sys.argv[1:]\n"
+            "if len(args) == 4 and args[:3] == ['-c', '%u', '--']:\n"
+            " path = pathlib.Path(args[3])\n"
+            f" if path.is_relative_to({str(self.root)!r}) and path.stat().st_uid == {os.getuid()}:\n"
+            f"  uid = {self.runner_uid}\n"
+            "  if str(path) == os.environ.get('FIXTURE_FOREIGN_OWNER'): uid += 1\n"
+            "  print(uid); raise SystemExit(0)\n"
+            f"raise SystemExit(subprocess.run([{real_stat!r}, *args], check=False).returncode)\n"
+        )
+        metadata.chmod(0o755)
         engine = self.binary / "docker"
         engine.write_text(
             "#!/usr/bin/env python3\nimport json, pathlib, sys\n"
@@ -199,7 +233,7 @@ class ProtectedIncusContextTests(unittest.TestCase):
         image = re.search(r'^COPILOT_DEVTOOL_IMAGE = "([^"]+)"$', (ROOT / "scripts/lit-push-ready.py").read_text(), re.MULTILINE).group(1)
         self.assertIn(image, runtime)
         self.assertEqual([image, "python3", "/controller/run-cell.py"], runtime[-3:])
-        for required in ("--read-only", "ALL", "no-new-privileges=true", f"{os.getuid()}:{os.getgid()}"):
+        for required in ("--read-only", "ALL", "no-new-privileges=true", f"{self.runner_uid}:{self.runner_gid}"):
             self.assertIn(required, runtime)
         mounts = [runtime[i + 1] for i, value in enumerate(runtime[:-1]) if value == "--mount"]
         for target in ("/workspace", "/candidate", "/controller", "/incus"):
@@ -209,6 +243,20 @@ class ProtectedIncusContextTests(unittest.TestCase):
         self.assertNotIn("GH_TOKEN", " ".join(runtime))
         self.assertNotIn(str(self.output), " ".join(runtime))
         self.assertEqual(2, len(self.output.read_text().splitlines()))
+
+    def test_root_runner_stops_before_any_engine_call(self):
+        result = self.invoke(FIXTURE_RUNNER_UID="0")
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("non-root runner required", result.stderr)
+        self.assertEqual([], self.calls())
+        self.assertEqual("", self.output.read_text())
+
+    def test_foreign_context_owner_stops_before_any_engine_call(self):
+        result = self.invoke(FIXTURE_FOREIGN_OWNER=str(self.context / "client.key"))
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("foreign context ownership", result.stderr)
+        self.assertEqual([], self.calls())
+        self.assertEqual("", self.output.read_text())
 
     def test_untrusted_action_identity_stops_before_any_engine_call(self):
         result = self.invoke(QUALITY_ACTION_REPOSITORY="foreign/action")
