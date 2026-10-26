@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -63,8 +64,10 @@ class QualityCancellationTests(unittest.TestCase):
         result = fixture.invoke()
         self.assertNotEqual(0, result.returncode)
         self.assertEqual("", fixture.output.read_text())
-        cells = list(fixture.runtime.glob("quality-cell.*"))
+        cells = list(fixture.recovery.glob("quality-cell.*"))
         self.assertEqual(1, len(cells))
+        self.assertFalse(cells[0].is_relative_to(fixture.runtime))
+        shutil.rmtree(fixture.runtime)
         self.assertEqual("private-owned-state", (cells[0] / "tmp/state").read_text())
         self.assertTrue((cells[0] / "recovery/context.json").is_file())
         self.assertFalse((cells[0] / "package").exists())
