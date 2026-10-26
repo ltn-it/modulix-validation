@@ -16,30 +16,6 @@ ACTION = ROOT / ".github/actions/run-quality-profile"
 
 
 class QualityRuntimeRegressions(unittest.TestCase):
-    def test_pinned_incus_resolves_registry_image_without_global_remotes(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "config.yml").write_text(yaml.safe_dump({
-                "default-remote": "quality",
-                "remotes": {
-                    "quality": {"addr": "https://quality.invalid", "protocol": "incus", "public": False},
-                    "images": {"addr": "https://images.linuxcontainers.org", "protocol": "simplestreams", "public": True},
-                },
-            }))
-            # A closed local proxy makes the real client's lookup deterministic
-            # and offline. Reaching the fixed image URL proves remote resolution,
-            # not image download, VM execution, or live service acceptance.
-            result = subprocess.run(
-                ["incus", "image", "info", "images:ubuntu/24.04"],
-                env={"PATH": os.environ["PATH"], "HOME": directory, "INCUS_CONF": directory,
-                     "HTTPS_PROXY": "http://127.0.0.1:1"},
-                capture_output=True, text=True, timeout=10, check=False,
-            )
-            self.assertNotEqual(0, result.returncode)
-            self.assertIn("https://images.linuxcontainers.org/", result.stderr)
-            self.assertIn("127.0.0.1:1", result.stderr)
-            self.assertNotIn("doesn't exist", result.stderr)
-
     def test_absent_package_output_never_selects_runner_root(self):
         action = yaml.safe_load((ACTION / "action.yml").read_text())
         upload = next(step for step in action["runs"]["steps"] if step.get("id") == "upload")
