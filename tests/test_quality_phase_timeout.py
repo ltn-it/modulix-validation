@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import yaml
 
@@ -15,6 +16,27 @@ WORKFLOW = ROOT / ".github/workflows/collection-quality-profile.yml"
 
 
 class QualityPhaseTimeoutTests(unittest.TestCase):
+    def setUp(self):
+        # Keep the reviewed worktree metadata read-only while each fixture's
+        # setup and phase processes use their own repository. Cleanup restores
+        # the inherited caller environment, including linked-worktree bindings.
+        environment = {key: value for key, value in os.environ.items()
+                       if key not in {"GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE"}}
+        isolation = mock.patch.dict(os.environ, environment, clear=True)
+        isolation.start()
+        self.addCleanup(isolation.stop)
+
+    def test_fixture_execution_restores_caller_git_environment(self):
+        bindings = {"GIT_DIR": "/unavailable/caller/git",
+                    "GIT_COMMON_DIR": "/unavailable/caller/common",
+                    "GIT_WORK_TREE": "/unavailable/caller/worktree"}
+        with mock.patch.dict(os.environ, bindings):
+            case = type(self)("test_hung_test_records_timeout_and_later_phases_still_run")
+            result = unittest.TestResult()
+            case.run(result)
+            self.assertTrue(result.wasSuccessful(), result.errors + result.failures)
+            self.assertEqual(bindings, {key: os.environ.get(key) for key in bindings})
+
     def test_hung_test_records_timeout_and_later_phases_still_run(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

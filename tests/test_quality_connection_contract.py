@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import yaml
 
@@ -15,6 +16,27 @@ ACTION = ROOT / ".github/actions/run-quality-profile"
 
 
 class QualityConnectionContractTests(unittest.TestCase):
+    def setUp(self):
+        # Linked-worktree dispatch binds Git to the read-only reviewed tree.
+        # Fixture repositories and their phase subprocesses need their own
+        # metadata; restore all caller bindings when this test finishes.
+        environment = {key: value for key, value in os.environ.items()
+                       if key not in {"GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE"}}
+        isolation = mock.patch.dict(os.environ, environment, clear=True)
+        isolation.start()
+        self.addCleanup(isolation.stop)
+
+    def test_fixture_execution_restores_caller_git_environment(self):
+        bindings = {"GIT_DIR": "/unavailable/caller/git",
+                    "GIT_COMMON_DIR": "/unavailable/caller/common",
+                    "GIT_WORK_TREE": "/unavailable/caller/worktree"}
+        with mock.patch.dict(os.environ, bindings):
+            case = type(self)("test_every_phase_supplies_private_vars_to_real_incus_connection_builder")
+            result = unittest.TestResult()
+            case.run(result)
+            self.assertTrue(result.wasSuccessful(), result.errors + result.failures)
+            self.assertEqual(bindings, {key: os.environ.get(key) for key in bindings})
+
     def fixture(self, root, addition=None, scenario="fixture"):
         subprocess.run(["git", "init", "--quiet", str(root)], check=True, capture_output=True)
         config = root / "molecule" / scenario / "molecule.yml"
