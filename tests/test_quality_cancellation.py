@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import secrets
 import shlex
 import shutil
 import signal
@@ -94,8 +95,11 @@ class QualityCancellationTests(unittest.TestCase):
         active_command = f"python3 -c {shlex.quote(active)}"
         if repeat_during_stop:
             active_command = "trap '' TERM; " + active_command
+        # Generate a fresh fixture value; no credential-shaped literal is committed.
+        self.command_canary = secrets.token_hex(24)
+        command_assignment = shlex.quote("KEYCLOAK_TEST_PASSWORD=" + self.command_canary)
         initialize = (
-            'echo KEYCLOAK_TEST_CLIENT_SECRET=private-fixture-canary >> "$GITHUB_ENV"; '
+            f'echo {command_assignment} >> "$GITHUB_ENV"; '
             'echo QUALITY_RESULT_ARTIFACT=fixture-result >> "$GITHUB_ENV"; '
         )
         if before_state:
@@ -211,7 +215,7 @@ class QualityCancellationTests(unittest.TestCase):
         path = cell / "recovery/context.json"
         self.assertEqual(0o700, path.parent.stat().st_mode & 0o777)
         self.assertEqual(0o600, path.stat().st_mode & 0o777)
-        self.assertNotIn("private-fixture-canary", path.read_text())
+        self.assertNotIn(self.command_canary, path.read_text())
         self.assertFalse((path.parent / "ram-control").exists())
         self.assertFalse((cell / "control/result.json").exists())
         return json.loads(path.read_text())
@@ -278,8 +282,8 @@ class QualityCancellationTests(unittest.TestCase):
         self.assertTrue((cell / "tmp/state").exists())
         self.assertFalse(json.loads((cell / "control/result.json").read_text())["success"])
         context = cell / "recovery/context.json"
-        self.assertNotIn("private-fixture-canary", context.read_text())
-        self.assertNotIn("private-fixture-canary", (cell / "package/evidence").read_text())
+        self.assertNotIn(self.command_canary, context.read_text())
+        self.assertNotIn(self.command_canary, (cell / "package/evidence").read_text())
 
     def test_interruption_during_destroy_does_not_retry_ambiguous_effect(self):
         root, cell, _ = self.exercise_cell(interrupt_destroy=True)
