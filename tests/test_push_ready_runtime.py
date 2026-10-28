@@ -1,8 +1,9 @@
 import importlib.util
+import os
+import subprocess
 import unittest
 from pathlib import Path
 from unittest import mock
-
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
@@ -28,59 +29,89 @@ class PushReadyRuntimeTests(unittest.TestCase):
                 legacy = PUSH_READY.governed_push_remote_from_url(
                     "origin", url.replace("ltn-it", "lightning-it")
                 )
-                self.assertEqual("lightning-it/modulix-validation", legacy["repository"])
+                self.assertEqual(
+                    "lightning-it/modulix-validation", legacy["repository"]
+                )
                 self.assertNotEqual(current["url_sha256"], legacy["url_sha256"])
 
     def test_renamed_fetch_does_not_reuse_a_differently_bound_push_remote(self):
-        with mock.patch.object(
-            PUSH_READY,
-            "git_output",
-            side_effect=[
-                "https://github.com/ltn-it/modulix-validation.git",
-                "https://github.com/lightning-it/modulix-validation.git",
-            ],
+        with (
+            mock.patch.object(
+                PUSH_READY,
+                "run",
+                side_effect=[
+                    subprocess.CompletedProcess(
+                        [], 0, "https://github.com/ltn-it/modulix-validation.git"
+                    ),
+                    subprocess.CompletedProcess(
+                        [], 0, "https://github.com/lightning-it/modulix-validation.git"
+                    ),
+                ],
+            ),
+            self.assertRaisesRegex(RuntimeError, "same governed repository"),
         ):
-            with self.assertRaisesRegex(RuntimeError, "same governed repository"):
-                PUSH_READY.fetch_authoritative_base("develop", "refs/remotes/origin/develop")
+            PUSH_READY.fetch_authoritative_base(
+                "develop", "refs/remotes/origin/develop"
+            )
 
-    def test_https_base_fetch_uses_scoped_header_not_argv(self):
+    def test_https_base_fetch_scopes_token_to_the_existing_credential_helper(self):
         completed = object()
         runner = mock.Mock(return_value=completed)
-        with mock.patch.object(
-            PUSH_READY,
-            "git_output",
-            side_effect=[
-                "https://github.com/lightning-it/example.git\n",
-                "https://github.com/lightning-it/example.git\n",
-            ],
-        ), mock.patch.object(
-            PUSH_READY,
-            "github_https_authorization",
-            return_value="AUTHORIZATION: basic masked-value",
-        ), mock.patch.object(PUSH_READY.subprocess, "run", runner):
+        remote = subprocess.CompletedProcess(
+            [], 0, "https://github.com/lightning-it/example.git\n"
+        )
+        with (
+            mock.patch.object(
+                PUSH_READY,
+                "run",
+                side_effect=[remote, remote],
+            ) as inspect_remote,
+            mock.patch.dict(
+                os.environ,
+                {
+                    "GH_TOKEN": "synthetic-fetch-token",
+                    "COPILOT_GITHUB_TOKEN": "synthetic-ai-token",
+                },
+            ),
+            mock.patch.object(PUSH_READY.subprocess, "run", runner),
+        ):
             result = PUSH_READY.fetch_authoritative_base(
                 "develop", "refs/remotes/origin/develop"
             )
         self.assertIs(result, completed)
-        self.assertNotIn("masked-value", " ".join(runner.call_args.args[0]))
+        self.assertNotIn("synthetic-fetch-token", " ".join(runner.call_args.args[0]))
         self.assertEqual(
-            "AUTHORIZATION: basic masked-value",
-            runner.call_args.kwargs["env"]["GIT_CONFIG_VALUE_0"],
+            "synthetic-fetch-token", runner.call_args.kwargs["env"]["GH_TOKEN"]
         )
+        self.assertEqual("", runner.call_args.kwargs["env"]["GIT_CONFIG_VALUE_0"])
+        self.assertEqual(
+            "!gh auth git-credential",
+            runner.call_args.kwargs["env"]["GIT_CONFIG_VALUE_1"],
+        )
+        self.assertNotIn("COPILOT_GITHUB_TOKEN", runner.call_args.kwargs["env"])
+        for call in inspect_remote.call_args_list:
+            self.assertNotIn("GH_TOKEN", call.kwargs["env"])
+            self.assertNotIn("COPILOT_GITHUB_TOKEN", call.kwargs["env"])
 
     def test_base_fetch_rejects_mismatched_fetch_and_push_repositories(self):
-        with mock.patch.object(
-            PUSH_READY,
-            "git_output",
-            side_effect=[
-                "git@github.com:lightning-it/other.git",
-                "https://github.com/lightning-it/example.git",
-            ],
+        with (
+            mock.patch.object(
+                PUSH_READY,
+                "run",
+                side_effect=[
+                    subprocess.CompletedProcess(
+                        [], 0, "git@github.com:lightning-it/other.git"
+                    ),
+                    subprocess.CompletedProcess(
+                        [], 0, "https://github.com/lightning-it/example.git"
+                    ),
+                ],
+            ),
+            self.assertRaisesRegex(RuntimeError, "same governed repository"),
         ):
-            with self.assertRaisesRegex(RuntimeError, "same governed repository"):
-                PUSH_READY.fetch_authoritative_base(
-                    "develop", "refs/remotes/origin/develop"
-                )
+            PUSH_READY.fetch_authoritative_base(
+                "develop", "refs/remotes/origin/develop"
+            )
 
     def change(
         self,
@@ -134,18 +165,20 @@ class PushReadyRuntimeTests(unittest.TestCase):
             )
 
         unreviewed = f"{branch} {'4' * 40} {branch} {'0' * 40}\n"
-        with mock.patch.object(
-            PUSH_READY,
-            "git_output",
-            return_value="4" * 40,
+        with (
+            mock.patch.object(
+                PUSH_READY,
+                "git_output",
+                return_value="4" * 40,
+            ),
+            self.assertRaisesRegex(RuntimeError, "not bound"),
         ):
-            with self.assertRaisesRegex(RuntimeError, "not bound"):
-                PUSH_READY.verify_pre_push_updates(
-                    payload,
-                    unreviewed,
-                    remote_name="origin",
-                    remote_url=remote_url,
-                )
+            PUSH_READY.verify_pre_push_updates(
+                payload,
+                unreviewed,
+                remote_name="origin",
+                remote_url=remote_url,
+            )
 
     def test_trusted_policy_rejects_a_changed_policy_entry(self):
         change = self.change()
@@ -153,16 +186,18 @@ class PushReadyRuntimeTests(unittest.TestCase):
         def tree_entry(commit, _path):
             return "base-entry" if commit == change.base_tip else "head-entry"
 
-        with mock.patch.object(
-            PUSH_READY,
-            "git_tree_entry",
-            side_effect=tree_entry,
-        ):
-            with self.assertRaisesRegex(
+        with (
+            mock.patch.object(
+                PUSH_READY,
+                "git_tree_entry",
+                side_effect=tree_entry,
+            ),
+            self.assertRaisesRegex(
                 RuntimeError,
                 "executable check policy differs",
-            ):
-                PUSH_READY.require_trusted_check_policy(change)
+            ),
+        ):
+            PUSH_READY.require_trusted_check_policy(change)
 
 
 if __name__ == "__main__":

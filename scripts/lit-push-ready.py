@@ -4,8 +4,12 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import contextlib
+import codecs
+from collections import namedtuple
+import functools
+import io
+import itertools
 import hashlib
 import json
 import os
@@ -15,10 +19,12 @@ import secrets
 import shlex
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
 import time
+import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, NamedTuple, Optional, Tuple
@@ -72,6 +78,19 @@ SECRET_PATH_FRAGMENTS = {
     "vault-password",
 }
 SECRET_PATH_MARKER = "secrets"
+PUBLIC_SECRET_NAMED_SOURCE_PATHS = {
+    "lightning-it/ansible-collection-supplementary": frozenset(
+        {
+            "roles/vault_connection_credentials/README.md",
+            "roles/vault_connection_credentials/defaults/main.yml",
+            "roles/vault_connection_credentials/meta/main.yml",
+            "roles/vault_connection_credentials/tasks/assert.yml",
+            "roles/vault_connection_credentials/tasks/main.yml",
+            "roles/vault_connection_credentials/tasks/read_source.yml",
+            "tests/unit/test_guacamole_connection_credentials.py",
+        }
+    )
+}
 SAFE_TERRAFORM_SECRET_MODULE_PATTERN = re.compile(
     r"[a-z0-9][a-z0-9_]*_secrets\.tf"
 )
@@ -79,12 +98,19 @@ SAFE_PUBLIC_SECRET_ROUTE_PATTERN = re.compile(
     r"(?:en/)?[a-z0-9]+(?:-[a-z0-9]+)*-secrets-"
     r"[a-z0-9]+(?:-[a-z0-9]+)*\.html"
 )
+PEM_KEY_BOUNDARY_PATTERN = re.compile(
+    r"-----(?:BEGIN|END) (?:[A-Z0-9]+ )?PRIVATE KEY-----"
+)
+PEM_KEY_BEGIN_BOUNDARY_PATTERN = re.compile(
+    r"-----BEGIN (?:[A-Z0-9]+ )?PRIVATE KEY-----"
+)
+PASSWORD_ASSIGNMENT_PATTERN = re.compile(
+    r"(?i)(?:api[_-]?key|client[_-]?secret|access[_-]?token|password)"
+    r"\s*[:=]\s*[\"']?[A-Za-z0-9_./+=-]{16,}"
+)
 SECRET_CONTENT_PATTERNS = (
-    re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
-    re.compile(
-        r"(?i)(?:api[_-]?key|client[_-]?secret|access[_-]?token|password)"
-        r"\s*[:=]\s*[\"']?[A-Za-z0-9_./+=-]{16,}"
-    ),
+    PEM_KEY_BOUNDARY_PATTERN,
+    PASSWORD_ASSIGNMENT_PATTERN,
     re.compile(r"\bgh[opusr]_[A-Za-z0-9]{20,}\b"),
     re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
     re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}\b"),
@@ -98,21 +124,42 @@ SECRET_CONTENT_PATTERNS = (
     re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"),
     re.compile(r"(?i)_authToken\s*=\s*[^\s]{12,}"),
 )
+PACKER_PASSWORD_ASSIGNMENT_MASK = 1 << SECRET_CONTENT_PATTERNS.index(
+    PASSWORD_ASSIGNMENT_PATTERN
+)
+PACKER_EMBEDDED_TOKEN_PATTERNS = tuple(
+    re.compile(
+        pattern.pattern.replace(r"\b", ""),
+        pattern.flags,
+    )
+    for pattern in SECRET_CONTENT_PATTERNS[2:]
+)
+PACKER_VARIABLE_REFERENCE_LINE = re.compile(
+    r"\s*password\s*=\s*var\.[a-z_][a-z0-9_]*\s*",
+)
 NPMRC_AUTH_PATTERN = re.compile(
     r"(?im)(?:^|[+:])\s*(?:_authToken|_auth|_password|username)\s*="
 )
 SECRET_FIXTURE_MANIFEST_PATH = ".lit/push-ready-secret-fixtures.json"
 SECRET_FIXTURE_PATH_PREFIXES = ("examples/", "molecule/", "tests/")
+SYNTHETIC_DOCUMENTATION_PATH_PATTERN = re.compile(
+    r"(?:README\.md|charts/(?:[a-z0-9][a-z0-9-]*/charts/)*"
+    r"[a-z0-9][a-z0-9-]*/"
+    r"(?:README\.md(?:\.gotmpl)?|values\.yaml))"
+)
 MAX_SECRET_FIXTURE_MANIFEST_BYTES = 100_000
 MAX_SECRET_FIXTURE_SOURCE_BYTES = 10_000_000
+MAX_PLANNED_PACKER_PATHS = 1_000
+MAX_PLANNED_PACKER_ATTRIBUTE_BYTES = 10_000_000
+MAX_PLANNED_PACKER_ATTRIBUTE_TRIPLES = 10_000
 INSTRUCTION_PATH_PATTERN = re.compile(
     r"(?:^|/)AGENTS\.md$|^\.github/copilot-instructions\.md$|"
     r"^\.github/instructions/.+\.instructions\.md$"
 )
 MAX_CONFIG_BYTES = 1_000_000
-MAX_REVIEW_BYTES = 5_000_000
+DEFAULT_DIFF_WARNING_BYTES = 500_000
 MAX_TIMEOUT_SECONDS = 3_600
-CHECK_TIMEOUT_SECONDS = 1_800
+CHECK_TIMEOUT_SECONDS = 2_700
 AUTHORITATIVE_BASE_REFS = {
     "refs/remotes/origin/develop": "develop",
     "refs/remotes/origin/main": "main",
@@ -186,21 +233,989 @@ COPILOT_REQUIRED_SAFETY_ARGUMENTS = (
 )
 
 
-class PlannedChange(NamedTuple):
-    """Immutable description of the repository state intended for the push."""
+# Content is always spooled to an anonymous temporary file. CHUNK_BYTES is an
+# allocation size, never an admission limit on a diff, file, or review.
+CHUNK_BYTES = 64 * 1024
+# Aggregate tracked-workspace read budget, independent of PR/diff sizing.
+MAX_TRACKED_WORKSPACE_SCAN_BYTES = 500_000_000
+# Fingerprints cover ignored and untracked files as well as Git metadata. Keep
+# their I/O bounded independently of review sizing so an ignored artifact
+# cannot exhaust the runner while checks compare pre/post state.
+MAX_FINGERPRINT_FILE_BYTES = 100_000_000
+MAX_FINGERPRINT_TOTAL_BYTES = 500_000_000
 
-    base_ref: str
-    base_tip: str
-    base_commit: str
-    head_commit: str
-    diff: str
-    paths: tuple[str, ...]
-    untracked_sha256: dict[str, str]
-    tree_fingerprint: str
+
+class PatchSpool:
+    """Complete private patch bytes with incremental identity and bounded reads."""
+
+    def __init__(self):
+        self.file = tempfile.TemporaryFile(mode="w+b")
+        self.size = 0
+        self.digest = hashlib.sha256()
+
+    def write(self, payload: bytes) -> None:
+        self.file.write(payload)
+        self.digest.update(payload)
+        self.size += len(payload)
+
+    def chunks(self):
+        self.file.flush()
+        self.file.seek(0)
+        digest = hashlib.sha256()
+        size = 0
+        while True:
+            value = self.file.read(CHUNK_BYTES)
+            if not value:
+                break
+            digest.update(value)
+            size += len(value)
+            yield value
+        if size != self.size or digest.digest() != self.digest.digest():
+            raise RuntimeError("private patch spool changed after construction")
+
+    def text_chunks(self, *, errors="strict"):
+        decoder = codecs.getincrementaldecoder("utf-8")(errors=errors)
+        for value in self.chunks():
+            yield decoder.decode(value)
+        yield decoder.decode(b"", final=True)
+
+    def close(self):
+        self.file.close()
+
+    def __del__(self):
+        if hasattr(self, "file"):
+            self.file.close()
+
+    def __bool__(self):
+        return self.size != 0
+
+    # Explicit compatibility accessors for historical diagnostic callers. The
+    # production pipeline never uses these materializing string operations.
+    def as_text(self):
+        return "".join(self.text_chunks())
+
+    def __contains__(self, value):
+        tail = ""
+        for chunk in self.text_chunks():
+            text = tail + chunk
+            if value in text:
+                return True
+            tail = text[-len(value) :] if value else ""
+        return False
+
+    def replace(self, *args):
+        return self.as_text().replace(*args)
+
+    def encode(self, *args, **kwargs):
+        return self.as_text().encode(*args, **kwargs)
+
+
+def patch_chunks(value):
+    if hasattr(value, "text_chunks"):
+        yield from value.text_chunks()
+    else:
+        for offset in range(0, len(value), CHUNK_BYTES):
+            yield value[offset : offset + CHUNK_BYTES]
+
+
+def stream_git(*args: str, cwd=None):
+    """Read stdout in bounded blocks; stderr never joins authenticated bytes."""
+    environment = isolated_git_environment()
+    directory = cwd or ROOT
+    try:
+        directory.resolve().relative_to(ROOT)
+    except ValueError:
+        for variable in ("GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE"):
+            environment.pop(variable, None)
+    with tempfile.TemporaryFile() as errors:
+        with subprocess.Popen(
+            ["git", *args],
+            cwd=directory,
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=errors,
+        ) as process:
+            try:
+                while True:
+                    chunk = process.stdout.read(CHUNK_BYTES)
+                    if not chunk:
+                        break
+                    yield chunk
+                if process.wait():
+                    errors.seek(0)
+                    diagnostic = errors.read(CHUNK_BYTES).decode("utf-8", "replace")
+                    raise RuntimeError(
+                        "streamed Git operation failed: " + diagnostic.strip()
+                    )
+            finally:
+                # A read/write/decoder failure must not leave a pipe writer
+                # blocked while Popen.__exit__ waits for it.
+                if process.poll() is None:
+                    process.kill()
+                process.stdout.close()
+                process.wait()
+
+
+def decoded_git_chunks(
+    *args, cwd=None, errors="surrogateescape", universal_newlines=True
+):
+    decoder = codecs.getincrementaldecoder("utf-8")(errors=errors)
+    # Match subprocess text=True universal-newline semantics across blocks.
+    if universal_newlines:
+        decoder = io.IncrementalNewlineDecoder(decoder, translate=True)
+    for value in stream_git(*args, cwd=cwd):
+        yield decoder.decode(value)
+    yield decoder.decode(b"", final=True)
+
+
+def hash_open_file(stream, *, max_bytes=None, purpose="File"):
+    digest = hashlib.sha256()
+    size = 0
+    while True:
+        read_size = CHUNK_BYTES
+        if max_bytes is not None:
+            # Read at most the remaining allowance plus one bounded byte that
+            # distinguishes exact-size input from an oversized stream.
+            read_size = min(CHUNK_BYTES, max_bytes - size + 1)
+        value = stream.read(read_size)
+        if not value:
+            break
+        size += len(value)
+        if max_bytes is not None and size > max_bytes:
+            raise RuntimeError(
+                f"{purpose} input exceeds {max_bytes} bytes"
+            )
+        digest.update(value)
+    return digest.hexdigest(), size
+
+
+def hash_repository_file(root, name, *, purpose, max_bytes=None):
+    descriptor = open_regular_below(root, name, purpose=purpose)
+    with os.fdopen(descriptor, "rb") as stream:
+        return hash_open_file(stream, max_bytes=max_bytes, purpose=purpose)
+
+
+def fingerprint_stream(cwd, untracked, *, integration=False):
+    """Hash exactly the historical sorted JSON bytes without buffering diff."""
+    digest = hashlib.sha256()
+    digest.update(b'{"diff":"')
+    for chunk in decoded_git_chunks(
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--binary",
+        "HEAD",
+        "--",
+        cwd=cwd,
+    ):
+        digest.update(json.dumps(chunk, ensure_ascii=True)[1:-1].encode("ascii"))
+    digest.update(b'","head":')
+    head = git_output_at(cwd, "rev-parse", "HEAD").strip()
+    digest.update(json.dumps(head).encode("ascii"))
+    if integration:
+        digest.update(b',"index_tree":')
+        tree = git_output_at(cwd, "write-tree").strip()
+        digest.update(json.dumps(tree).encode("ascii"))
+    digest.update(b',"status":"')
+    for chunk in decoded_git_chunks(
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all",
+        "-z",
+        cwd=cwd,
+    ):
+        digest.update(json.dumps(chunk, ensure_ascii=True)[1:-1].encode("ascii"))
+    digest.update(b'","untracked":')
+    encoder = json.JSONEncoder(sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    for part in encoder.iterencode(untracked):
+        digest.update(part.encode("ascii"))
+    digest.update(b"}")
+    return digest.hexdigest()
+
+
+def split_text_fragments(chunks):
+    """Yield bounded fragments and exact str.splitlines-style separators."""
+    pending_cr = False
+    for chunk in chunks:
+        if not chunk:
+            continue
+        if pending_cr:
+            if chunk.startswith("\n"):
+                yield "", "\r\n"
+                chunk = chunk[1:]
+            else:
+                yield "", "\r"
+            pending_cr = False
+        start = 0
+        for match in re.finditer(r"\r\n|[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]", chunk):
+            if match[0] == "\r" and match.end() == len(chunk):
+                yield chunk[start : match.start()], None
+                pending_cr = True
+            else:
+                yield chunk[start : match.start()], match[0]
+            start = match.end()
+        if start < len(chunk):
+            yield chunk[start:], None
+    if pending_cr:
+        yield "", "\r"
+
+
+class StreamingPatterns:
+    """Finite-state execution of the existing governed regexes, without buffers.
+
+    Only the syntax used by those fixed patterns is supported. Unknown syntax
+    fails closed. Matching keeps states, never subject text or an unbounded
+    line, token, whitespace run, PEM modifier, or JWT component.
+    """
+
+    def __init__(self, patterns):
+        try:
+            from re import _parser as parser
+        except ImportError:  # Python 3.9/3.10 compatibility
+            import sre_parse as parser
+        self.edges = []
+        self.accepts = {}
+        self.starts = []
+
+        def state():
+            self.edges.append([])
+            return len(self.edges) - 1
+
+        def build(tokens, flags):
+            first = current = state()
+            for operation, argument in tokens:
+                end = state()
+                kind = str(operation)
+                if kind == "LITERAL":
+                    matcher = re.compile(re.escape(chr(argument)), flags).fullmatch
+                    self.edges[current].append(("char", matcher, end))
+                elif kind == "IN":
+                    pieces = []
+                    for op, arg in argument:
+                        tag = str(op)
+                        if tag == "NEGATE":
+                            pieces.append("^")
+                        elif tag == "LITERAL":
+                            pieces.append(re.escape(chr(arg)))
+                        elif tag == "RANGE":
+                            pieces.append(
+                                re.escape(chr(arg[0])) + "-" + re.escape(chr(arg[1]))
+                            )
+                        elif tag == "CATEGORY":
+                            categories = {
+                                "CATEGORY_SPACE": r"\s",
+                                "CATEGORY_NOT_SPACE": r"\S",
+                                "CATEGORY_WORD": r"\w",
+                                "CATEGORY_DIGIT": r"\d",
+                            }
+                            if str(arg) not in categories:
+                                raise RuntimeError(
+                                    "unsupported streaming regex category"
+                                )
+                            pieces.append(categories[str(arg)])
+                        else:
+                            raise RuntimeError(
+                                "unsupported streaming regex character class"
+                            )
+                    matcher = re.compile("[" + "".join(pieces) + "]", flags).fullmatch
+                    self.edges[current].append(("char", matcher, end))
+                elif kind == "SUBPATTERN":
+                    _, add, remove, body = argument
+                    a, b = build(body, (flags | add) & ~remove)
+                    self.edges[current].append(("epsilon", None, a))
+                    self.edges[b].append(("epsilon", None, end))
+                elif kind == "BRANCH":
+                    for branch in argument[1]:
+                        a, b = build(branch, flags)
+                        self.edges[current].append(("epsilon", None, a))
+                        self.edges[b].append(("epsilon", None, end))
+                elif kind == "MAX_REPEAT":
+                    minimum, maximum, body = argument
+                    cursor = current
+                    for _ in range(minimum):
+                        a, b = build(body, flags)
+                        self.edges[cursor].append(("epsilon", None, a))
+                        cursor = b
+                    if maximum == parser.MAXREPEAT:
+                        self.edges[cursor].append(("epsilon", None, end))
+                        a, b = build(body, flags)
+                        self.edges[cursor].append(("epsilon", None, a))
+                        self.edges[b].append(("epsilon", None, cursor))
+                    else:
+                        for _ in range(maximum - minimum):
+                            self.edges[cursor].append(("epsilon", None, end))
+                            a, b = build(body, flags)
+                            self.edges[cursor].append(("epsilon", None, a))
+                            cursor = b
+                        self.edges[cursor].append(("epsilon", None, end))
+                elif kind == "AT":
+                    self.edges[current].append(("assert", (str(argument), flags), end))
+                else:
+                    raise RuntimeError("unsupported governed streaming regex: " + kind)
+                current = end
+            return first, current
+
+        for number, pattern in enumerate(patterns):
+            parsed = parser.parse(pattern.pattern, pattern.flags)
+            first, last = build(parsed, parsed.state.flags)
+            self.starts.append(first)
+            self.accepts[last] = 1 << number
+        self.step = functools.lru_cache(maxsize=4096)(self._step)
+
+    def _step(self, active, previous, character, beginning):
+        states = set(active) | set(self.starts)
+        pending = list(states)
+        matches = 0
+        while pending:
+            current = pending.pop()
+            matches |= self.accepts.get(current, 0)
+            for kind, value, target in self.edges[current]:
+                passed = kind == "epsilon"
+                if kind == "assert":
+                    assertion, flags = value
+                    if assertion == "AT_BOUNDARY":
+                        left = previous is not None and (
+                            previous.isalnum() or previous == "_"
+                        )
+                        right = character is not None and (
+                            character.isalnum() or character == "_"
+                        )
+                        passed = left != right
+                    elif assertion in {"AT_BEGINNING", "AT_BEGINNING_STRING"}:
+                        passed = beginning or (
+                            assertion == "AT_BEGINNING"
+                            and flags & re.MULTILINE
+                            and previous == "\n"
+                        )
+                    elif assertion == "AT_END_STRING":
+                        passed = character is None
+                    else:
+                        raise RuntimeError(
+                            "unsupported streaming regex assertion: " + assertion
+                        )
+                if passed and target not in states:
+                    states.add(target)
+                    pending.append(target)
+        following = set()
+        if character is not None:
+            for current in states:
+                for kind, matcher, target in self.edges[current]:
+                    if kind == "char" and matcher(character):
+                        following.add(target)
+        return tuple(sorted(following)), matches
+
+    def scanner(self):
+        return PatternScanner(self)
+
+
+class PatternScanner:
+    def __init__(self, machine):
+        self.machine = machine
+        self.active = ()
+        self.previous = None
+        self.beginning = True
+        self.matches = 0
+
+    def feed(self, text):
+        for character in text:
+            self.active, matches = self.machine.step(
+                self.active, self.previous, character, self.beginning
+            )
+            self.matches |= matches
+            self.previous = character
+            self.beginning = False
+
+    def finish(self):
+        _, matches = self.machine.step(self.active, self.previous, None, self.beginning)
+        return self.matches | matches
+
+
+_STREAM_PATTERNS = None
+
+
+def content_scanner():
+    global _STREAM_PATTERNS
+    if _STREAM_PATTERNS is None:
+        _STREAM_PATTERNS = StreamingPatterns(
+            (*SECRET_CONTENT_PATTERNS, NPMRC_AUTH_PATTERN)
+        )
+    return _STREAM_PATTERNS.scanner()
+
+
+def apply_patch_stream(command, *, patch, cwd, capture=True):
+    """Keep git-apply input and potentially large diagnostics out of RAM."""
+    owned = not hasattr(patch, "text_chunks")
+    if owned:
+        value = patch
+        patch = PatchSpool()
+        for chunk in patch_chunks(value):
+            patch.write(chunk.encode("utf-8"))
+    try:
+        patch.file.flush()
+        patch.file.seek(0)
+        environment = isolated_git_environment()
+        for variable in ("GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE"):
+            environment.pop(variable, None)
+        with tempfile.TemporaryFile() as output:
+            result = subprocess.run(
+                command,
+                cwd=cwd,
+                env=environment,
+                stdin=patch.file,
+                stdout=output,
+                stderr=output,
+                check=False,
+            )
+            output.seek(0)
+            diagnostic = output.read(CHUNK_BYTES).decode("utf-8", "replace")
+            return subprocess.CompletedProcess(command, result.returncode, diagnostic)
+    finally:
+        if owned:
+            patch.close()
+
+
+def file_text_chunks(stream, *, errors="replace"):
+    decoder = codecs.getincrementaldecoder("utf-8")(errors=errors)
+    while True:
+        value = stream.read(CHUNK_BYTES)
+        if not value:
+            break
+        yield decoder.decode(value)
+    yield decoder.decode(b"", final=True)
+
+
+def filtered_scan_chunks(
+    chunks,
+    documented,
+    *,
+    path=None,
+    diff=False,
+    redact=False,
+    packer=False,
+    packer_paths=frozenset(),
+    removed_fixture_lines=None,
+):
+    """Apply existing exact-line exceptions with bounded line spooling.
+
+    A line may exceed memory: only its digest, parser prefix and finite regex
+    states are retained. No content is discarded by the scan or patch spool.
+    """
+    old_path = new_path = None
+    old_number = new_number = 0
+    in_hunk = False
+    line_number = 0
+    packer_machine = None
+    packer_token_machine = None
+    removed_fixture_lines = removed_fixture_lines or {}
+    governed_paths = (
+        frozenset(documented) | frozenset(packer_paths) | frozenset(removed_fixture_lines)
+    )
+    governed_old_paths = governed_diff_header_paths("a", governed_paths)
+    governed_new_paths = governed_diff_header_paths("b", governed_paths)
+    removed_headers = {
+        f"diff --git a/{name} b/{name}": name for name in removed_fixture_lines
+    }
+    removed_section = None
+    ungoverned_path = object()
+    if packer or packer_paths:
+        packer_machine = StreamingPatterns(
+            [
+                re.compile(
+                    r"\A(?:"
+                    + globals()["PACKER_VARIABLE_REFERENCE_LINE"].pattern
+                    + r")\Z"
+                )
+            ]
+        )
+        packer_token_machine = StreamingPatterns(PACKER_EMBEDDED_TOKEN_PATTERNS)
+    with tempfile.SpooledTemporaryFile(max_size=CHUNK_BYTES, mode="w+b") as line_file:
+        prefix = ""
+        digest = hashlib.sha256()
+        first = True
+        pending = False
+        line_scan = content_scanner()
+        packer_scan = packer_machine.scanner() if packer_machine else None
+        packer_token_scan = (
+            packer_token_machine.scanner() if packer_token_machine else None
+        )
+        # Flush an unterminated last line without inventing an empty one.
+        for fragment, ending in itertools.chain(
+            split_text_fragments(chunks), [("", "EOF")]
+        ):
+            if ending == "EOF" and not pending:
+                break
+            pending = True
+            line_file.write(fragment.encode("utf-8"))
+            prefix += fragment[: max(0, CHUNK_BYTES - len(prefix))]
+            content_fragment = fragment[1:] if first and diff else fragment
+            digest.update(content_fragment.encode("utf-8"))
+            if fragment:
+                first = False
+            line_scan.feed(fragment)
+            if packer_scan:
+                packer_scan.feed(content_fragment)
+                packer_token_scan.feed(content_fragment)
+            if ending is None:
+                continue
+            line_number += 1
+            mask = False
+            old_content = False
+            match_path = path
+            match_number = line_number
+            if diff:
+                match_path = None
+                if prefix.startswith("diff --git "):
+                    old_path = new_path = None
+                    in_hunk = False
+                    removed_section = removed_headers.get(prefix)
+                elif not in_hunk and prefix.startswith("--- "):
+                    old_path = governed_old_paths.get(prefix[4:], ungoverned_path)
+                elif not in_hunk and prefix.startswith("+++ "):
+                    new_path = governed_new_paths.get(prefix[4:], ungoverned_path)
+                elif prefix.startswith("@@"):
+                    hunk = re.match(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@", prefix)
+                    if hunk is None or (
+                        documented and old_path is None and new_path is None
+                    ):
+                        raise RuntimeError(
+                            "planned diff has a malformed hunk header or no governed file path"
+                        )
+                    old_number, new_number = map(int, hunk.groups())
+                    in_hunk = True
+                elif in_hunk and prefix[:1] in {"+", "-", " "}:
+                    if prefix.startswith("+"):
+                        match_path, match_number = new_path, new_number
+                        new_number += 1
+                    elif prefix.startswith("-"):
+                        match_path, match_number = old_path, old_number
+                        old_number += 1
+                        old_content = True
+                    else:
+                        match_path, match_number = (
+                            old_path or new_path,
+                            old_number or new_number,
+                        )
+                        old_number += 1
+                        new_number += 1
+            entry = documented.get(match_path or "", {}).get(match_number)
+            if (
+                entry is not None
+                and digest.hexdigest() == entry[0]
+                and not PEM_KEY_BEGIN_BOUNDARY_PATTERN.search(entry[1])
+            ):
+                mask = True
+            flags = line_scan.finish()
+            if (
+                old_content
+                and match_path == removed_section
+                and removed_fixture_lines.get(match_path, {}).get(match_number)
+                == digest.hexdigest()
+            ):
+                mask = True
+            if redact and old_content and old_path not in documented and flags & ~1:
+                mask = True
+            if (
+                packer_scan
+                and packer_scan.finish()
+                and (not diff or match_path in packer_paths)
+                # A bare Packer variable reference may trigger only the generic
+                # password-assignment pattern. Preserve every token-specific
+                # match so a token embedded in an identifier is still rejected.
+                and not flags & ~PACKER_PASSWORD_ASSIGNMENT_MASK
+                and not packer_token_scan.finish()
+            ):
+                mask = True
+            if mask:
+                yield "DOCUMENTED_SYNTHETIC_FIXTURE\n"
+            else:
+                line_file.seek(0)
+                yield from file_text_chunks(line_file, errors="strict")
+                yield "\n"
+            line_file.seek(0)
+            line_file.truncate()
+            prefix = ""
+            digest = hashlib.sha256()
+            first = True
+            pending = False
+            line_scan = content_scanner()
+            packer_scan = packer_machine.scanner() if packer_machine else None
+            packer_token_scan = (
+                packer_token_machine.scanner() if packer_token_machine else None
+            )
+
+
+def scan_chunks(chunks):
+    scanner = content_scanner()
+    for chunk in chunks:
+        scanner.feed(chunk)
+    return scanner.finish()
+
+
+def planned_packer_attribute_names(name, *, max_bytes, max_triples):
+    """Read one exact check-attr record stream within the shared budget."""
+    fields = []
+    pending = b""
+    names = set()
+    byte_count = 0
+    triple_count = 0
+    for chunk in stream_git("check-attr", "-z", "--all", "--", name):
+        byte_count += len(chunk)
+        if byte_count > max_bytes:
+            raise RuntimeError(
+                "planned Packer attribute scan exceeds its "
+                f"{MAX_PLANNED_PACKER_ATTRIBUTE_BYTES}-byte resource budget"
+            )
+        parts = (pending + chunk).split(b"\0")
+        pending = parts.pop()
+        for part in parts:
+            fields.append(part.decode("utf-8", "surrogateescape"))
+            if len(fields) != 3:
+                continue
+            reported_name, attribute, _value = fields
+            if reported_name != name:
+                raise RuntimeError(
+                    "planned Packer attribute scan returned an unexpected path"
+                )
+            triple_count += 1
+            if triple_count > max_triples:
+                raise RuntimeError(
+                    "planned Packer attribute scan exceeds its "
+                    f"{MAX_PLANNED_PACKER_ATTRIBUTE_TRIPLES}-triple resource budget"
+                )
+            names.add(attribute)
+            fields.clear()
+    if pending or fields:
+        raise RuntimeError("planned Packer attribute scan returned malformed output")
+    return names, byte_count, triple_count
+
+
+def planned_packer_paths(paths):
+    """Return changed Packer files whose complete snapshot has no block marker."""
+    candidates = [name for name in paths if name.endswith(".pkr.hcl")]
+    if len(candidates) > MAX_PLANNED_PACKER_PATHS:
+        raise RuntimeError(
+            f"planned Packer scan exceeds its {MAX_PLANNED_PACKER_PATHS}-path resource budget"
+        )
+    allowed = set()
+    total = 0
+    attribute_bytes = 0
+    attribute_triples = 0
+    for name in candidates:
+        present_attributes, used_bytes, used_triples = (
+            planned_packer_attribute_names(
+                name,
+                max_bytes=MAX_PLANNED_PACKER_ATTRIBUTE_BYTES - attribute_bytes,
+                max_triples=(
+                    MAX_PLANNED_PACKER_ATTRIBUTE_TRIPLES - attribute_triples
+                ),
+            )
+        )
+        attribute_bytes += used_bytes
+        attribute_triples += used_triples
+        if present_attributes & {"working-tree-encoding", "filter"}:
+            # The exception is defined for the exact bytes inspected below.
+            # Encoded or filtered worktrees are scanned without masking.
+            continue
+        candidate = ROOT / name
+        if not candidate.exists():
+            continue
+        descriptor = open_repository_regular(
+            name, purpose="Planned Packer exception"
+        )
+        marker_found = False
+        tail = b""
+        with os.fdopen(descriptor, "rb") as stream:
+            while True:
+                chunk = stream.read(CHUNK_BYTES)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_TRACKED_WORKSPACE_SCAN_BYTES:
+                    raise RuntimeError(
+                        "planned Packer scan exceeds its 500000000-byte resource budget"
+                    )
+                if any(marker in tail + chunk for marker in (b"/*", b"*/", b"<<")):
+                    marker_found = True
+                tail = chunk[-1:]
+        if not marker_found:
+            allowed.add(name)
+    return frozenset(allowed)
+
+
+RETIRED_SOURCE_FIXTURE_PATH = (
+    "container/overrides/container-ee-wunder-devtools-ubi9/tests/test_lit_push_ready.py"
+)
+RETIRED_SOURCE_FIXTURE_BEFORE = "5ce260a626d01326bd7e8f816015c69457490ae9"
+RETIRED_SOURCE_FIXTURE_AFTER = "3d2707da21ada0388c3fcfdc92de19e7b2dad415"
+RETIRED_SOURCE_FIXTURE_DIFF = (
+    "6b0ef04ea864938beb6432e39eb3539b5ca693b75e99210409a42b3041724a1e"
+)
+RETIRED_INLINE_PEM_FIXTURE_PATH = "tests/test_push_ready.py"
+RETIRED_INLINE_PEM_FIXTURE_BEFORE = "2dd3261d34987bb7873bcfd3a6d77dc785e921d9"
+RETIRED_INLINE_PEM_FIXTURE_AFTER = "a5e1f186fdedf43a04e93640a7dee2c33723560d"
+RETIRED_INLINE_PEM_FIXTURE_DIFF = (
+    "4d9f90b35884d419417ccaf54fc8ab6f282243f7bf9f7a5ac0ca9976fd5afcc6"
+)
+RETIRED_INLINE_PEM_FIXTURE_LINE = (
+    2875, "51d91509dc816bd37d94edc4feada4cd6cd711fa0d8b65a2da7a69de145543c4"
+)
+
+
+def retired_source_fixture_lines(change):
+    """Retire historical dummy markers only in exact source migrations.
+
+    Bind regular Git blobs on both authoritative base and committed head, then
+    authenticate the complete file diff as an ordered digest of exact lines.
+    The admission becomes unreachable once the protected before blob advances.
+    It grants no workspace, added-line, context-line or general PEM exception.
+    """
+    if RETIRED_SOURCE_FIXTURE_PATH in change.paths:
+        path = RETIRED_SOURCE_FIXTURE_PATH
+        before = RETIRED_SOURCE_FIXTURE_BEFORE
+        after = RETIRED_SOURCE_FIXTURE_AFTER
+        expected_diff = RETIRED_SOURCE_FIXTURE_DIFF
+        lines = {
+            223: "910cab1ada7b0bdf7e70d26d9bc64ea6b87288bc1e7bae4b989c076972d35b23",
+            465: "591225f282569a23a0523fe4442688d04c13b4aa591181b2d17fffa139c21b2f",
+        }
+    elif RETIRED_INLINE_PEM_FIXTURE_PATH in change.paths:
+        path = RETIRED_INLINE_PEM_FIXTURE_PATH
+        before = RETIRED_INLINE_PEM_FIXTURE_BEFORE
+        after = RETIRED_INLINE_PEM_FIXTURE_AFTER
+        expected_diff = RETIRED_INLINE_PEM_FIXTURE_DIFF
+        lines = dict((RETIRED_INLINE_PEM_FIXTURE_LINE,))
+    else:
+        return {}
+    if change.base_ref != "refs/remotes/origin/develop" or any(
+        not is_full_git_object_id(commit)
+        for commit in (change.base_tip, change.base_commit, change.head_commit)
+    ):
+        return {}
+    for commit, blob in (
+        (change.base_tip, before),
+        (change.base_commit, before),
+        (change.head_commit, after),
+    ):
+        if git_tree_entry(commit, path) != f"100644 blob {blob}\t{path}\0":
+            return {}
+    header = f"diff --git a/{path} b/{path}"
+    section = None
+    sections = []
+    prefix = ""
+    line = hashlib.sha256()
+    pending = False
+    for fragment, ending in itertools.chain(
+        split_text_fragments(patch_chunks(change.patch)), [("", "EOF")]
+    ):
+        if ending == "EOF" and not pending:
+            break
+        pending = True
+        prefix += fragment[: max(0, len(header) + 1 - len(prefix))]
+        line.update(fragment.encode("utf-8"))
+        if ending is None:
+            continue
+        if ending != "EOF":
+            line.update(ending.encode("utf-8"))
+        if prefix.startswith("diff --git "):
+            if section is not None:
+                sections.append(section.hexdigest())
+            section = hashlib.sha256() if prefix == header else None
+        if section is not None:
+            digest = line.digest()
+            index = re.fullmatch(r"index ([0-9a-f]{7,40})\.\.([0-9a-f]{7,40}) 100644", prefix)
+            if (
+                index is not None
+                and ending == "\n"
+                and digest == hashlib.sha256((prefix + ending).encode("utf-8")).digest()
+                and before.startswith(index[1])
+                and after.startswith(index[2])
+            ):
+                # Git abbreviation varies by repository object count. The
+                # complete identities were independently proved above.
+                digest = hashlib.sha256(
+                    (f"index {before}.."
+                     f"{after} 100644\n").encode("utf-8")
+                ).digest()
+            section.update(digest)
+        prefix = ""
+        line = hashlib.sha256()
+        pending = False
+    if section is not None:
+        sections.append(section.hexdigest())
+    if sections != [expected_diff]:
+        return {}
+    return {path: lines}
+
+
+def streaming_review_safe(change, documented, *, redact=False):
+    secret_like_paths = [path for path in change.paths if is_secret_like_path(path)]
+    allowed_paths = public_secret_named_source_paths() if secret_like_paths else ()
+    unsafe = [path for path in secret_like_paths if path not in allowed_paths]
+    if unsafe:
+        raise RuntimeError(
+            "local review refused for secret-like paths: " + ", ".join(sorted(unsafe))
+        )
+    removed_fixture_lines = retired_source_fixture_lines(change) if redact else {}
+    if redact and scan_chunks(
+        filtered_scan_chunks(
+            patch_chunks(change.patch), documented, diff=True, redact=False,
+            removed_fixture_lines=removed_fixture_lines,
+        )
+    ) & 1:
+        raise RuntimeError(
+            "local review refused because the planned patch contains PEM private key material"
+        )
+    scanned = scan_chunks(
+        filtered_scan_chunks(
+            patch_chunks(change.patch),
+            documented,
+            diff=True,
+            redact=redact,
+            packer_paths=planned_packer_paths(change.paths),
+            removed_fixture_lines=removed_fixture_lines,
+        )
+    )
+    secret_mask = (1 << len(SECRET_CONTENT_PATTERNS)) - 1
+    if scanned & secret_mask:
+        raise RuntimeError(
+            "local review refused because the planned review input contains secret-like content"
+        )
+    # Fixture exceptions never authorize .npmrc authentication configuration.
+    if any(Path(path).name.lower() == ".npmrc" for path in change.paths):
+        npm = scan_chunks(
+            filtered_scan_chunks(
+                patch_chunks(change.patch), {}, diff=True, redact=redact
+            )
+        )
+        if npm & (1 << len(SECRET_CONTENT_PATTERNS)):
+            raise RuntimeError(
+                "local review refused because planned .npmrc content contains authentication configuration"
+            )
+
+
+def streaming_workspace_safe(workspace, documented, *, allow_packer=False):
+    names = git_output_at(workspace, "ls-files", "-z").split("\0")
+    total = 0
+    unsafe = []
+    basenames = {
+        ".env",
+        ".netrc",
+        ".pypirc",
+        "auth.json",
+        "credentials",
+        "credentials.json",
+        "id_ed25519",
+        "id_rsa",
+        "kubeconfig",
+        "vault-password",
+    }
+    for name in filter(None, names):
+        parts = tuple(part.lower() for part in Path(name).parts)
+        if parts[-1] in basenames or any(
+            part in {".aws", ".ssh", "secrets"} for part in parts[:-1]
+        ):
+            unsafe.append(name)
+        descriptor = open_regular_below(workspace, name, purpose="Sanitized review")
+        with os.fdopen(descriptor, "rb") as stream:
+            packer = allow_packer and name.endswith(".pkr.hcl")
+            tail = b""
+            while True:
+                chunk = stream.read(CHUNK_BYTES)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_TRACKED_WORKSPACE_SCAN_BYTES:
+                    raise RuntimeError(
+                        "tracked workspace scan exceeds its 500000000-byte resource budget"
+                    )
+                if any(marker in tail + chunk for marker in (b"/*", b"*/", b"<<")):
+                    packer = False
+                tail = chunk[-1:]
+            stream.seek(0)
+            if parts[-1] == ".npmrc":
+                if scan_chunks(file_text_chunks(stream)) & (
+                    1 << len(SECRET_CONTENT_PATTERNS)
+                ):
+                    raise RuntimeError(
+                        "local review refused because tracked .npmrc contains authentication configuration"
+                    )
+                stream.seek(0)
+            matches = scan_chunks(
+                filtered_scan_chunks(
+                    file_text_chunks(stream), documented, path=name, packer=packer
+                )
+            )
+            if matches & ((1 << len(SECRET_CONTENT_PATTERNS)) - 1):
+                raise RuntimeError(
+                    "local review refused because the tracked review snapshot "
+                    f"contains secret-like content in {name}"
+                )
+    if unsafe:
+        raise RuntimeError(
+            "local review refused for secret-like tracked paths: "
+            + ", ".join(sorted(unsafe))
+        )
+
+
+class PlannedChange(
+    namedtuple(
+        "PlannedChangeRecord",
+        "base_ref base_tip base_commit head_commit patch paths untracked_sha256 tree_fingerprint",
+    )
+):
+    """Immutable identity with a complete disk-backed patch in production.
+
+    The historical .diff string accessor remains explicit for diagnostic
+    callers; the pipeline uses .patch and never materializes that accessor.
+    """
+
+    __slots__ = ()
+
+    def __new__(
+        cls,
+        base_ref,
+        base_tip,
+        base_commit,
+        head_commit,
+        diff,
+        paths,
+        untracked_sha256,
+        tree_fingerprint,
+    ):
+        return super().__new__(
+            cls,
+            base_ref,
+            base_tip,
+            base_commit,
+            head_commit,
+            diff,
+            paths,
+            untracked_sha256,
+            tree_fingerprint,
+        )
+
+    @property
+    def diff(self):
+        if self.patch is None:
+            raise RuntimeError("planned patch has not been materialized")
+        return (
+            self.patch.as_text() if hasattr(self.patch, "text_chunks") else self.patch
+        )
+
+    def _replace(self, **values):
+        if "diff" in values:
+            values["patch"] = values.pop("diff")
+        return super()._replace(**values)
 
     @property
     def diff_sha256(self) -> str:
-        return sha256_text(self.diff)
+        if self.patch is None:
+            raise RuntimeError("planned patch has not been materialized")
+        return (
+            self.patch.digest.hexdigest()
+            if hasattr(self.patch, "text_chunks")
+            else sha256_text(self.patch)
+        )
 
 
 def is_secret_like_path(path: str) -> bool:
@@ -224,6 +1239,15 @@ def is_secret_like_path(path: str) -> bool:
             continue
         return True
     return False
+
+
+def public_secret_named_source_paths() -> frozenset[str]:
+    """Resolve reviewed public paths once for the exact governed repository."""
+    try:
+        repository = governed_push_remote()["repository"]
+    except RuntimeError:
+        return frozenset()
+    return PUBLIC_SECRET_NAMED_SOURCE_PATHS.get(repository, frozenset())
 
 
 class ReviewTopology(NamedTuple):
@@ -280,6 +1304,27 @@ GIT_IDENTITY_ENVIRONMENT = frozenset(
         "GIT_COMMITTER_NAME",
         "GIT_COMMITTER_EMAIL",
         "GIT_COMMITTER_DATE",
+    }
+)
+HTTPS_FETCH_ENVIRONMENT_ALLOWLIST = frozenset(
+    {
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "LOGNAME",
+        "PATH",
+        "SSL_CERT_DIR",
+        "SSL_CERT_FILE",
+        "TMPDIR",
+        "USER",
+        "XDG_CONFIG_HOME",
+        "GH_CONFIG_DIR",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
     }
 )
 
@@ -420,6 +1465,17 @@ def git_output(*args: str) -> str:
     return result.stdout
 
 
+def git_exact_text(*args: str) -> str:
+    """Return UTF-8 Git output without universal-newline path corruption."""
+    return "".join(
+        decoded_git_chunks(
+            *args,
+            errors="surrogateescape",
+            universal_newlines=False,
+        )
+    )
+
+
 def evidence_path() -> Path:
     git_dir = Path(git_output("rev-parse", "--git-dir").strip())
     if not git_dir.is_absolute():
@@ -511,47 +1567,34 @@ def read_repository_file(
 
 
 def untracked_names() -> list[str]:
-    names = git_output("ls-files", "--others", "--exclude-standard", "-z")
+    names = git_exact_text("ls-files", "--others", "--exclude-standard", "-z")
     return [entry for entry in names.split("\0") if entry]
 
 
-def untracked_file_hashes(max_bytes: int = 100_000_000) -> dict[str, str]:
+def untracked_file_hashes(max_bytes: Optional[int] = None) -> dict[str, str]:
     hashes: dict[str, str] = {}
     total = 0
+    total_limit = MAX_FINGERPRINT_TOTAL_BYTES if max_bytes is None else max_bytes
     for name in untracked_names():
-        remaining = max_bytes - total
-        if remaining < 0:
-            raise RuntimeError("Fingerprint input exceeds its aggregate byte limit")
-        payload, _ = read_repository_file(
+        remaining = total_limit - total
+        digest, size = hash_repository_file(
+            ROOT,
             name,
             purpose="Fingerprint",
-            max_bytes=remaining,
+            max_bytes=min(MAX_FINGERPRINT_FILE_BYTES, remaining),
         )
-        total += len(payload)
-        hashes[name] = sha256_bytes(payload)
+        total += size
+        if total > total_limit:
+            raise RuntimeError(
+                f"Fingerprint input exceeds {total_limit} total bytes"
+            )
+        hashes[name] = digest
     return hashes
 
 
 def tree_fingerprint() -> str:
     reject_hidden_index_entries()
-    payload = {
-        "head": git_output("rev-parse", "HEAD").strip(),
-        "status": git_output(
-            "status", "--porcelain=v1", "--untracked-files=all", "-z"
-        ),
-        "diff": git_output(
-            "diff",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--binary",
-            "HEAD",
-            "--",
-        ),
-        "untracked": untracked_file_hashes(),
-    }
-    return sha256_text(
-        json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-    )
+    return fingerprint_stream(ROOT, untracked_file_hashes())
 
 
 def reject_hidden_index_entries() -> None:
@@ -637,37 +1680,27 @@ def current_branch_ref() -> str:
     return branch
 
 
-def github_https_authorization() -> str:
-    """Return a masked-process-safe GitHub Authorization header value."""
-    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
-    if token is None:
+def fetch_authoritative_base(branch: str, base_ref: str) -> subprocess.CompletedProcess[str]:
+    """Fetch one governed base branch through the local GitHub helper."""
+    inspection_environment = {
+        name: value
+        for name, value in isolated_git_environment().items()
+        if name in HTTPS_FETCH_ENVIRONMENT_ALLOWLIST or name.startswith("GIT_")
+    }
+
+    def read_remote_url(*arguments: str) -> str:
         result = run(
-            ["gh", "auth", "token", "--hostname", "github.com"],
+            ["git", "remote", "get-url", *arguments],
             capture=True,
             timeout=30,
+            env=inspection_environment,
         )
         if result.returncode:
-            raise RuntimeError(
-                "GitHub HTTPS origin requires GH_TOKEN, GITHUB_TOKEN, or "
-                "an authenticated gh session"
-            )
-        token = result.stdout.strip()
-    if (
-        not token
-        or len(token) > 4096
-        or any(ord(character) < 32 or ord(character) == 127 for character in token)
-    ):
-        raise RuntimeError("GitHub HTTPS authentication token is invalid")
-    credentials = base64.b64encode(
-        f"x-access-token:{token}".encode("utf-8")
-    ).decode("ascii")
-    return f"AUTHORIZATION: basic {credentials}"
+            raise RuntimeError("cannot inspect governed origin URL")
+        return result.stdout.strip()
 
-
-def fetch_authoritative_base(branch: str, base_ref: str) -> subprocess.CompletedProcess[str]:
-    """Fetch one governed base branch without exposing credentials on argv."""
-    origin_url = git_output("remote", "get-url", "origin").strip()
-    push_url = git_output("remote", "get-url", "--push", "origin").strip()
+    origin_url = read_remote_url("origin")
+    push_url = read_remote_url("--push", "origin")
     fetch_remote = governed_push_remote_from_url("origin", origin_url)
     push_remote = governed_push_remote_from_url("origin", push_url)
     if fetch_remote["repository"] != push_remote["repository"]:
@@ -683,18 +1716,42 @@ def fetch_authoritative_base(branch: str, base_ref: str) -> subprocess.Completed
         f"+refs/heads/{branch}:{base_ref}",
     ]
     if not origin_url.startswith("https://github.com/"):
-        return run(command, capture=True, timeout=120)
-    environment = isolated_git_environment()
-    environment.update(
+        ssh_environment = dict(inspection_environment)
+        if "SSH_AUTH_SOCK" in os.environ:
+            ssh_environment["SSH_AUTH_SOCK"] = os.environ["SSH_AUTH_SOCK"]
+        return run(command, capture=True, timeout=120, env=ssh_environment)
+    fetch_environment = dict(inspection_environment)
+    github_token = os.environ.get("GH_TOKEN")
+    if github_token is None:
+        github_token = os.environ.get("GITHUB_TOKEN")
+    if github_token is not None:
+        if (
+            not github_token
+            or len(github_token) > 4096
+            or any(
+                ord(character) < 32 or ord(character) == 127
+                for character in github_token
+            )
+        ):
+            raise RuntimeError("GitHub HTTPS authentication token is invalid")
+        # GitHub Actions exposes only GITHUB_TOKEN. Normalize either supported
+        # input to the single variable consumed by gh for this fetch process;
+        # remote inspection and every other child stay credential-free.
+        fetch_environment["GH_TOKEN"] = github_token
+    # A credential helper may supply the existing local GitHub credential on
+    # demand. Only the narrowly scoped fetch receives an ephemeral CI token.
+    fetch_environment.update(
         {
-            "GIT_CONFIG_COUNT": "2",
-            # Preserve the distributed engine's existing header slot while
-            # adding the container-safe workspace binding. Several managed
-            # repositories validate this credential-placement contract.
-            "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
-            "GIT_CONFIG_VALUE_0": github_https_authorization(),
-            "GIT_CONFIG_KEY_1": "safe.directory",
-            "GIT_CONFIG_VALUE_1": str(ROOT),
+            "GIT_CONFIG_COUNT": "3",
+            # Let Git request the existing local credential only when the
+            # governed HTTPS fetch needs it. An empty helper resets any
+            # repository-local helper list before the governed helper is added.
+            "GIT_CONFIG_KEY_0": "credential.helper",
+            "GIT_CONFIG_VALUE_0": "",
+            "GIT_CONFIG_KEY_1": "credential.helper",
+            "GIT_CONFIG_VALUE_1": "!gh auth git-credential",
+            "GIT_CONFIG_KEY_2": "safe.directory",
+            "GIT_CONFIG_VALUE_2": str(ROOT),
         }
     )
     return subprocess.run(
@@ -707,7 +1764,7 @@ def fetch_authoritative_base(branch: str, base_ref: str) -> subprocess.Completed
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         timeout=120,
-        env=environment,
+        env=fetch_environment,
     )
 
 
@@ -878,11 +1935,7 @@ def load_config() -> dict[str, Any]:
     review = data.get("review")
     if not isinstance(review, dict):
         raise RuntimeError("review must be an object")
-    require_positive_integer(
-        review.get("max_diff_bytes"),
-        "review.max_diff_bytes",
-        maximum=MAX_REVIEW_BYTES,
-    )
+    review_warning_threshold(review)
     evidence = data.get("evidence")
     if not isinstance(evidence, dict):
         raise RuntimeError("evidence must be an object")
@@ -893,6 +1946,24 @@ def load_config() -> dict[str, Any]:
     )
     validate_remote_only_checks(data.get("remote_only_checks"))
     return data
+
+
+def review_warning_threshold(review: dict[str, Any]) -> int | None:
+    """Version 2 migration: the legacy ceiling is readable, never enforced.
+
+    The old value is not reused as a warning threshold. Existing configurations
+    get the same 500000-byte advisory as new ones; explicit null disables it.
+    """
+    if not isinstance(review, dict) or set(review) - {"max_diff_bytes", "warn_diff_bytes"}:
+        raise RuntimeError("review accepts only warn_diff_bytes and deprecated max_diff_bytes")
+    if "max_diff_bytes" in review:
+        legacy = review["max_diff_bytes"]
+        if type(legacy) is not int or legacy <= 0:
+            raise RuntimeError("deprecated review.max_diff_bytes must be a positive integer")
+    warning = review.get("warn_diff_bytes", DEFAULT_DIFF_WARNING_BYTES)
+    if warning is not None and (type(warning) is not int or warning <= 0):
+        raise RuntimeError("review.warn_diff_bytes must be a positive integer or null")
+    return warning
 
 
 def instructions_digest() -> str:
@@ -1048,13 +2119,42 @@ def minimal_check_environment(state_root: Path) -> dict[str, str]:
     return environment
 
 
+class CheckIntegrationContext(NamedTuple):
+    """Internally generated checkout facts, not native PR/run provenance."""
+
+    base: str
+    head: str
+    merge_base: str
+    integration_tree: str
+    checkout_commit: str
+
+
 def execute_checks(
-    config: dict[str, Any], *, cwd: Optional[Path] = None
+    config: dict[str, Any], *, cwd: Optional[Path] = None,
+    integration_context: Optional[CheckIntegrationContext] = None,
 ) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     check_cwd = (cwd or ROOT).resolve()
     with tempfile.TemporaryDirectory(prefix="lit-check-environment-") as temporary:
         environment = minimal_check_environment(Path(temporary))
+        if integration_context is not None:
+            if not isinstance(integration_context, CheckIntegrationContext) or not all(
+                isinstance(value, str)
+                and re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", value)
+                and value != "0" * len(value)
+                for value in integration_context
+            ) or len({len(value) for value in integration_context}) != 1:
+                raise RuntimeError("invalid internally generated integration context")
+            # Never inherit caller context or credentials. Only the integration
+            # executor supplies these facts after its existing topology checks.
+            environment.update({
+                "LIT_CHECK_CONTEXT_VERSION": "1",
+                "LIT_CHECK_CONTEXT_KIND": "synthetic-integration",
+                **{
+                    "LIT_CHECK_" + field.upper(): value
+                    for field, value in integration_context._asdict().items()
+                },
+            })
         for check in config["checks"]:
             # load_config validates these values; retain validation for direct callers.
             if not isinstance(check, dict):
@@ -1126,6 +2226,22 @@ def git_output_at(cwd: Path, *args: str) -> str:
 def expected_integration_tree(change: PlannedChange) -> str:
     """Produce the pull-request merge tree with Git 2.34-compatible commands."""
     assert_safe_git_configuration(ROOT)
+    ancestry = run(
+        ["git", "merge-base", "--is-ancestor", change.base_tip, change.head_commit],
+        capture=True,
+    )
+    if ancestry.returncode not in (0, 1):
+        raise RuntimeError(
+            "could not determine integration ancestry: " + ancestry.stdout.strip()
+        )
+    if ancestry.returncode == 0:
+        # A proven ancestor (including equality) has no independent base-side
+        # changes: the merge tree is exactly the committed head tree. Avoid
+        # entering Git's disposable-worktree stash path for this identity.
+        tree = git_output("rev-parse", "--verify", f"{change.head_commit}^{{tree}}").strip()
+        if not is_full_git_object_id(tree):
+            raise RuntimeError("Git returned an invalid integration tree")
+        return tree
     with isolated_integration_directory() as temporary:
         worktree = temporary / "merge-tree-worktree"
         disabled_hooks = temporary / "disabled-hooks"
@@ -1177,6 +2293,12 @@ def expected_integration_tree(change: PlannedChange) -> str:
                 "-c",
                 "merge.autoStash=false",
                 "-c",
+                # Git 2.55's parallel index preload can report a clean fresh
+                # linked checkout as changed before stash's second refresh.
+                # Use serial stat checks for this disposable merge and its
+                # stash child; retain normal content/conflict validation.
+                "core.preloadIndex=false",
+                "-c",
                 "user.name=Lightning IT push-ready",
                 "-c",
                 "user.email=push-ready@invalid",
@@ -1212,6 +2334,18 @@ def expected_integration_tree(change: PlannedChange) -> str:
                     )
                     == worktree_identity
                 ):
+                    # Refresh content-aware stat information before quick
+                    # drift proofs: a fresh linked index can report changes
+                    # while porcelain confirms identical file contents. Actual
+                    # staged, tracked or untracked changes must still veto
+                    # recovery, as must either following independent proof.
+                    content_status = git_output_at(
+                        worktree,
+                        "status",
+                        "--porcelain=v1",
+                        "--untracked-files=all",
+                        "-z",
+                    )
                     staged_drift = run(
                         [
                             "git",
@@ -1246,7 +2380,8 @@ def expected_integration_tree(change: PlannedChange) -> str:
                         "-z",
                     )
                     pre_rewrite_clean = (
-                        staged_drift.returncode == 0
+                        not content_status
+                        and staged_drift.returncode == 0
                         and tracked_drift.returncode == 0
                         and not untracked_drift
                     )
@@ -1257,11 +2392,12 @@ def expected_integration_tree(change: PlannedChange) -> str:
                         # index file untouched and make the single recovery
                         # merge fail identically.
                         # Wait past the window only after all three drift
-                        # proofs pass, then force a Git 2.34-compatible rewrite
-                        # in index format version 2.  This preserves every
-                        # index entry while moving the index timestamp beyond
-                        # the racy-clean window.  Re-prove status before the
-                        # one permitted retry.
+                        # proofs pass, then force Git to restat every index
+                        # entry and rewrite the Git 2.34-compatible index
+                        # format version 2.  This preserves every index entry
+                        # while moving the index timestamp beyond the
+                        # racy-clean window.  Re-prove status before the one
+                        # permitted retry.
                         time.sleep(1.1)
                         rewritten = run(
                             [
@@ -1269,8 +2405,10 @@ def expected_integration_tree(change: PlannedChange) -> str:
                                 "-c",
                                 f"core.hooksPath={disabled_hooks}",
                                 "update-index",
+                                "--really-refresh",
                                 "--index-version",
                                 "2",
+                                "--force-write-index",
                             ],
                             capture=True,
                             cwd=worktree,
@@ -1453,59 +2591,25 @@ def require_trusted_check_policy(
 
 
 def integration_worktree_fingerprint(cwd: Path) -> str:
-    # Deliberately omit --exclude-standard: deterministic validation must not
-    # be able to hide checkout mutations behind a repository ignore rule.
-    untracked = git_output_at(
-        cwd,
-        "ls-files",
-        "--others",
-        "-z",
-    ).split("\0")
-    untracked_hashes: dict[str, str] = {}
-    untracked_bytes = 0
-    for name in (entry for entry in untracked if entry):
-        descriptor = open_regular_below(
+    # Include ignored files: deterministic checks cannot hide mutations.
+    names = git_output_at(cwd, "ls-files", "--others", "-z").split("\0")
+    hashes = {}
+    total = 0
+    for name in filter(None, names):
+        remaining = MAX_FINGERPRINT_TOTAL_BYTES - total
+        digest, size = hash_repository_file(
             cwd,
             name,
             purpose="Worktree fingerprint",
+            max_bytes=min(MAX_FINGERPRINT_FILE_BYTES, remaining),
         )
-        try:
-            with os.fdopen(descriptor, "rb") as stream:
-                descriptor = -1
-                payload = stream.read(100_000_001)
-        finally:
-            if descriptor >= 0:
-                os.close(descriptor)
-        if len(payload) > 100_000_000:
+        total += size
+        if total > MAX_FINGERPRINT_TOTAL_BYTES:
             raise RuntimeError(
-                "worktree fingerprint input exceeds 100000000 bytes"
+                "Worktree fingerprint input exceeds 500000000 total bytes"
             )
-        untracked_bytes += len(payload)
-        if untracked_bytes > 500_000_000:
-            raise RuntimeError(
-                "worktree fingerprint input exceeds 500000000 total bytes"
-            )
-        untracked_hashes[name] = sha256_bytes(payload)
-    payload = {
-        "head": git_output_at(cwd, "rev-parse", "HEAD").strip(),
-        "index_tree": git_output_at(cwd, "write-tree").strip(),
-        "status": git_output_at(
-            cwd, "status", "--porcelain=v1", "--untracked-files=all", "-z"
-        ),
-        "diff": git_output_at(
-            cwd,
-            "diff",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--binary",
-            "HEAD",
-            "--",
-        ),
-        "untracked": untracked_hashes,
-    }
-    return sha256_text(
-        json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    )
+        hashes[name] = digest
+    return fingerprint_stream(cwd, hashes, integration=True)
 
 
 def synthetic_integration_commit(
@@ -1813,7 +2917,16 @@ def execute_integration_checks(
                     "synthetic pull-request integration parents are invalid"
                 )
             before = integration_worktree_fingerprint(worktree)
-            checks = execute_checks(config, cwd=worktree)
+            checks = execute_checks(
+                config, cwd=worktree,
+                integration_context=CheckIntegrationContext(
+                    base=change.base_tip,
+                    head=change.head_commit,
+                    merge_base=change.base_commit,
+                    integration_tree=integration_tree,
+                    checkout_commit=git_output_at(worktree, "rev-parse", "HEAD").strip(),
+                ),
+            )
             after = integration_worktree_fingerprint(worktree)
             if after != before:
                 raise RuntimeError(
@@ -1843,7 +2956,7 @@ def execute_integration_checks(
 
 def quote_diff_path(prefix: str, name: str) -> str:
     value = f"{prefix}/{name}"
-    if re.search(r"[\s\"\\\x00-\x1f\x7f-\xff]", value):
+    if re.search(r'[\s"\\]|[^\x20-\x7e]', value):
         encoded = value.encode("utf-8", errors="surrogateescape")
         escaped: list[str] = []
         for byte in encoded:
@@ -1851,10 +2964,18 @@ def quote_diff_path(prefix: str, name: str) -> str:
                 escaped.append("\\\\")
             elif byte == ord('"'):
                 escaped.append('\\"')
+            elif byte == 0x07:
+                escaped.append("\\a")
+            elif byte == 0x08:
+                escaped.append("\\b")
             elif byte == ord("\t"):
                 escaped.append("\\t")
             elif byte == ord("\n"):
                 escaped.append("\\n")
+            elif byte == 0x0B:
+                escaped.append("\\v")
+            elif byte == 0x0C:
+                escaped.append("\\f")
             elif byte == ord("\r"):
                 escaped.append("\\r")
             elif 0x20 <= byte <= 0x7E:
@@ -1863,6 +2984,28 @@ def quote_diff_path(prefix: str, name: str) -> str:
                 escaped.append(f"\\{byte:03o}")
         return '"' + "".join(escaped) + '"'
     return value
+
+
+def tracked_diff_header_path(prefix: str, name: str) -> str:
+    """Encode one tracked unified-diff header path with core.quotePath=true."""
+    value = f"{prefix}/{name}"
+    if re.search(r'["\\]|[^\x20-\x7e]', value):
+        return quote_diff_path(prefix, name)
+    return value + ("\t" if " " in value else "")
+
+
+def governed_diff_header_paths(prefix: str, paths) -> dict[str, str]:
+    """Index exact tracked and synthetic header encodings for governed paths."""
+    result: dict[str, str] = {}
+    for path in paths:
+        for encoded in {
+            tracked_diff_header_path(prefix, path),
+            quote_diff_path(prefix, path),
+        }:
+            previous = result.setdefault(encoded, path)
+            if previous != path:
+                raise RuntimeError("governed diff path encodings are ambiguous")
+    return result
 
 
 def unquote_diff_path(value: str, prefix: str) -> Optional[str]:
@@ -1978,99 +3121,451 @@ def render_untracked_patch(
     return "".join(parts)
 
 
+def spool_untracked_patch(name, patch):
+    raw = PatchSpool()
+    try:
+        descriptor = open_repository_regular(name, purpose="Untracked fingerprint")
+        with os.fdopen(descriptor, "rb") as stream:
+            mode = os.fstat(stream.fileno()).st_mode
+            while True:
+                payload = stream.read(CHUNK_BYTES)
+                if not payload:
+                    break
+                if b"\0" in payload:
+                    raise RuntimeError(
+                        f"local review refused for binary untracked path: {name}"
+                    )
+                raw.write(payload)
+        lines = 0
+        partial = False
+        try:
+            for fragment, ending in split_text_fragments(raw.text_chunks()):
+                partial = True
+                if ending is not None:
+                    lines += 1
+                    partial = False
+            lines += partial
+        except UnicodeError as exc:
+            raise RuntimeError(
+                f"local review refused for non-UTF-8 untracked path: {name}"
+            ) from exc
+        old_path = quote_diff_path("a", name)
+        new_path = quote_diff_path("b", name)
+        mode_value = "100755" if mode & 0o111 else "100644"
+        header = f"diff --git {old_path} {new_path}\nnew file mode {mode_value}\n"
+        if not raw.size:
+            header += "index 0000000..e69de29\n"
+        else:
+            header += f"--- /dev/null\n+++ {new_path}\n@@ -0,0 +1,{lines} @@\n"
+        patch.write(header.encode("utf-8"))
+        beginning = True
+        for fragment, ending in split_text_fragments(raw.text_chunks()):
+            if beginning:
+                patch.write(b"+")
+                beginning = False
+            patch.write(fragment.encode("utf-8"))
+            if ending is not None:
+                patch.write(ending.encode("utf-8"))
+                if not ending.endswith("\n"):
+                    patch.write(b"\n\\ No newline at end of file\n")
+                beginning = True
+        if not beginning:
+            patch.write(b"\n\\ No newline at end of file\n")
+        return raw.digest.hexdigest(), raw.size
+    finally:
+        raw.close()
+
+
+IMAGE_FILE_LIMIT = 10_000_000
+IMAGE_CHANGE_LIMIT = 250_000_000
+ENDPOINT_SCAN_LIMIT = 500_000_000
+
+
+def validate_image_payload(name: str, payload: bytes, mode: int) -> None:
+    """Admit only bounded raster assets in the website's designated directories."""
+    path = Path(name)
+    extension = path.suffix.lower()
+    approved_hero_video = (
+        name == "assets/img/lightning-it-hero.webm"
+        and hashlib.sha256(payload).hexdigest() == "f4069e399230354936036cdac8abf31bca887dbae6f2981f5cdc459f45d8774a"
+    )
+    allowed = approved_hero_video or (
+        name.startswith("assets/img/") and extension in {".png", ".webp", ".jpg", ".jpeg"}
+    ) or (
+        name.startswith("tests/browser/visual.spec.ts-snapshots/") and extension == ".png"
+    )
+    if (not allowed or path.is_absolute() or ".." in path.parts
+            or mode & 0o111 or not stat.S_ISREG(mode)):
+        raise RuntimeError(f"binary content is not an allowed regular image: {name}")
+    if not payload or len(payload) > IMAGE_FILE_LIMIT:
+        raise RuntimeError(f"image exceeds file resource limit: {name}")
+    matches = {
+        ".webm": approved_hero_video and payload.startswith(b"\x1a\x45\xdf\xa3"),
+        ".png": payload.startswith(b"\x89PNG\r\n\x1a\n") and payload.endswith(b"IEND\xaeB`\x82"),
+        ".webp": (len(payload) >= 20 and payload[:4] == b"RIFF"
+                  and payload[8:12] == b"WEBP"
+                  and int.from_bytes(payload[4:8], "little") + 8 == len(payload)),
+        ".jpg": payload.startswith(b"\xff\xd8\xff") and payload.endswith(b"\xff\xd9"),
+        ".jpeg": payload.startswith(b"\xff\xd8\xff") and payload.endswith(b"\xff\xd9"),
+    }
+    if not matches.get(extension, False):
+        raise RuntimeError(f"image signature does not match extension: {name}")
+    text = payload.decode("utf-8", errors="replace")
+    if any(pattern.search(text) for pattern in SECRET_CONTENT_PATTERNS):
+        raise RuntimeError(f"secret-like content in image: {name}")
+
+
+def validate_tracked_images(base_commit: str) -> None:
+    """Validate both endpoints while retaining the exact Git binary patch."""
+    names = git_exact_text("diff", "--no-ext-diff", "--no-textconv", "--no-renames",
+                       "--name-only", "-z", base_commit, "--").split("\0")
+    total = 0
+    scanned = 0
+
+    def validate_endpoint(name: str, payload: bytes, mode: int) -> int:
+        # Classify raw bytes, never Git attributes or diff-driver output.
+        path = Path(name)
+        raw_extension = path.suffix
+        extension = path.suffix.lower()
+        media_extensions = {".png", ".webp", ".jpg", ".jpeg", ".webm"}
+        if extension in media_extensions and raw_extension != extension:
+            raise RuntimeError(f"image extension must use canonical lowercase: {name}")
+        website_png = (
+            (name.startswith("assets/img/")
+             or name.startswith("tests/browser/visual.spec.ts-snapshots/"))
+            and extension == ".png"
+        )
+        # The existing closed-profile PNG validator below owns generic PNGs.
+        # This endpoint pass adds the website's bounded JPEG/WebP/WebM contract
+        # and independently classifies its PNG endpoints despite attributes.
+        if extension == ".png" and not website_png:
+            return 0
+        try:
+            payload.decode("utf-8")
+            binary = b"\0" in payload
+        except UnicodeDecodeError:
+            binary = True
+        if binary or extension in media_extensions:
+            validate_image_payload(name, payload, mode)
+            return len(payload)
+        return 0
+
+    def inspect_text(name: str, chunks) -> None:
+        # Non-media text can be one enormous line: classify incrementally.
+        nonlocal scanned
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="strict")
+        try:
+            for chunk in chunks:
+                scanned += len(chunk)
+                if scanned > ENDPOINT_SCAN_LIMIT:
+                    raise RuntimeError("changed endpoints exceed scan resource limit")
+                if b"\0" in chunk:
+                    raise RuntimeError(f"binary content is not an allowed regular image: {name}")
+                decoder.decode(chunk)
+            decoder.decode(b"", final=True)
+        except UnicodeDecodeError as exc:
+            raise RuntimeError(f"binary content is not an allowed regular image: {name}") from exc
+
+    for name in filter(None, names):
+        media = Path(name).suffix.lower() in {".png", ".webp", ".jpg", ".jpeg", ".webm"}
+        # Preserve media's stricter path contract. Text paths retain the
+        # existing deterministic Git quoting and descriptor-safe open policy.
+        if media:
+            unquote_diff_path(quote_diff_path("a", name), "a")
+        entry = git_output("ls-tree", base_commit, "--", ":(literal)" + name).strip()
+        if entry and not entry.startswith("040000 tree "):
+            metadata, _ = entry.split("\t", 1)
+            mode, kind, oid = metadata.split()
+            if kind != "blob":
+                raise RuntimeError(f"binary content is not a regular image: {name}")
+            size = int(git_output("cat-file", "-s", oid))
+            if size > ENDPOINT_SCAN_LIMIT - scanned:
+                raise RuntimeError("changed endpoints exceed scan resource limit")
+            if media:
+                payload = subprocess.run(["git", "cat-file", "blob", oid], cwd=ROOT,
+                                         check=True, stdout=subprocess.PIPE,
+                                         env=isolated_git_environment()).stdout
+                scanned += len(payload)
+                total += validate_endpoint(name, payload, int(mode, 8))
+            else:
+                chunks = stream_git("cat-file", "blob", oid)
+                try:
+                    inspect_text(name, chunks)
+                finally:
+                    chunks.close()
+        candidate = ROOT / name
+        if (candidate.exists() and not candidate.is_dir()) or candidate.is_symlink():
+            if not media:
+                descriptor = open_repository_regular(name, purpose="Binary endpoint policy")
+                with os.fdopen(descriptor, "rb") as stream:
+                    inspect_text(name, iter(lambda: stream.read(CHUNK_BYTES), b""))
+                continue
+            payload, mode = read_repository_file(name, purpose="Image policy", max_bytes=ENDPOINT_SCAN_LIMIT - scanned)
+            scanned += len(payload)
+            indexed = git_output("ls-files", "--stage", "-z", "--", ":(literal)" + name)
+            if indexed:
+                records = [record for record in indexed.split("\0") if record]
+                if len(records) != 1 or records[0].split("\t", 1)[0].split()[2] != "0":
+                    raise RuntimeError(f"unmerged image endpoint: {name}")
+                git_mode = int(records[0].split(" ", 1)[0], 8)
+                # Either Git's index or the working tree can mark it executable.
+                mode |= git_mode & 0o111
+            total += validate_endpoint(name, payload, mode)
+        if total > IMAGE_CHANGE_LIMIT:
+            raise RuntimeError("image changes exceed aggregate resource limit")
+
+
+PNG_MAX_BYTES = 10 * 1024 * 1024
+PNG_MAX_RAW_BYTES = 64 * 1024 * 1024
+
+
+def png_inflate(data: bytes, limit: int) -> bytes:
+    """Bound both allocation and accepted compressed-stream extent."""
+    try:
+        decoder = zlib.decompressobj()
+        result = decoder.decompress(data, limit + 1)
+    except zlib.error as exc:
+        raise RuntimeError("PNG contains invalid compressed data") from exc
+    if len(result) > limit or not decoder.eof or decoder.unused_data:
+        raise RuntimeError("PNG compressed data exceeds its limit or stream extent")
+    return result
+
+
+def validate_png(payload: bytes) -> None:
+    """Admit the closed, metadata-free RGB/RGBA8 profile used by our diagrams."""
+    if len(payload) > PNG_MAX_BYTES or not payload.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise RuntimeError("PNG signature or 10 MiB file limit is invalid")
+    offset = 8
+    have_header = False
+    have_data = False
+    have_end = False
+    image_data = bytearray()
+    raw_size = row_size = 0
+    while offset < len(payload):
+        if offset + 12 > len(payload):
+            raise RuntimeError("PNG chunk is truncated")
+        length = int.from_bytes(payload[offset:offset + 4], "big")
+        kind = payload[offset + 4:offset + 8]
+        end = offset + 12 + length
+        if end > len(payload):
+            raise RuntimeError("PNG chunk is truncated")
+        data = payload[offset + 8:end - 4]
+        crc = int.from_bytes(payload[end - 4:end], "big")
+        if zlib.crc32(kind + data) != crc:
+            raise RuntimeError("PNG chunk CRC is invalid")
+        if kind not in {b"IHDR", b"IDAT", b"IEND"}:
+            raise RuntimeError("PNG contains an unsupported chunk; metadata is not admitted")
+        if not have_header and kind != b"IHDR":
+            raise RuntimeError("PNG must start with IHDR")
+        if kind == b"IHDR":
+            if have_header or length != 13:
+                raise RuntimeError("PNG IHDR is invalid")
+            width, height, depth, color, compression, filtering, interlace = struct.unpack(
+                ">IIBBBBB", data
+            )
+            if (
+                not 0 < width <= 16384 or not 0 < height <= 16384
+                or depth != 8 or color not in {2, 6}
+                or compression or filtering or interlace
+            ):
+                raise RuntimeError("PNG requires bounded, static noninterlaced RGB/RGBA8")
+            row_size = width * (3 if color == 2 else 4) + 1
+            raw_size = row_size * height
+            if raw_size > PNG_MAX_RAW_BYTES:
+                raise RuntimeError("PNG decoded image exceeds 64 MiB")
+            have_header = True
+        elif kind == b"IDAT":
+            image_data.extend(data)
+            have_data = True
+        else:
+            if length or not have_data or end != len(payload):
+                raise RuntimeError("PNG end marker or trailing content is invalid")
+            have_end = True
+        offset = end
+    if not have_end:
+        raise RuntimeError("PNG end marker is missing")
+    decoded = png_inflate(bytes(image_data), raw_size)
+    if len(decoded) != raw_size or any(decoded[i] > 4 for i in range(0, raw_size, row_size)):
+        raise RuntimeError("PNG decoded rows or filter bytes are invalid")
+
+
+def validate_planned_pngs(base_commit: str, tracked_names: list[str]) -> None:
+    """Preflight PNG modes and base blobs; reject all other binary changes.
+
+    Git's complete binary patch is retained for hashing and exact reconstruction.
+    Untracked binary files must first be staged so both Git modes are checked.
+    """
+    entries = git_exact_text(
+        "diff", "--no-ext-diff", "--no-textconv", "--numstat", "--no-renames",
+        "-z", base_commit, "--",
+    ).split("\0")
+    for entry in filter(None, entries):
+        added, removed, name = entry.split("\t", 2)
+        if (added == "-" or removed == "-") and Path(name).suffix not in {
+            ".jpeg",
+            ".jpg",
+            ".png",
+            ".webm",
+            ".webp",
+        }:
+            raise RuntimeError("local review refused because the planned tracked diff contains binary content outside validated PNGs")
+    validate_png_tree(ROOT, base_commit, tracked_names)
+    for name in filter(lambda value: value.endswith(".png"), tracked_names):
+        candidate = ROOT / name
+        if candidate.exists() or candidate.is_symlink():
+            index_records = git_exact_text("ls-files", "--stage", "-z", "--", ":(literal)" + name).split("\0")
+            for record in filter(None, index_records):
+                metadata, path = record.split("\t", 1)
+                if metadata.split()[0] != "100644" or path != name:
+                    raise RuntimeError("PNG index must be a non-executable regular file")
+            _, mode = read_repository_file(name, purpose="PNG validation", max_bytes=PNG_MAX_BYTES)
+            if mode & 0o111:
+                raise RuntimeError("PNG must be a non-executable regular file")
+            # Bound the raw file read, but canonical Git blobs are the authority.
+
+
+def validate_png_tree(repository: Path, tree: str, names: list[str]) -> None:
+    """Validate exact immutable Git blobs, never converted checkout bytes."""
+    for name in filter(lambda value: value.endswith(".png"), names):
+        records = git_output_at(repository, "ls-tree", "-z", tree, "--", ":(literal)" + name).split("\0")
+        for record in filter(None, records):
+            metadata, path = record.split("\t", 1)
+            mode, kind, oid = metadata.split()
+            if mode != "100644" or kind != "blob" or path != name:
+                raise RuntimeError("PNG tree must be a non-executable regular file")
+            size = int(git_output_at(repository, "cat-file", "-s", oid))
+            if size > PNG_MAX_BYTES:
+                raise RuntimeError("PNG tree blob exceeds 10 MiB")
+            validate_png(b"".join(stream_git("cat-file", "blob", oid, cwd=repository)))
+
+
+def validate_website_media_tree(repository: Path, tree: str, names: list[str]) -> None:
+    """Validate admitted website media from canonical integration-tree blobs."""
+    for name in names:
+        extension = Path(name).suffix
+        if extension not in {".jpg", ".jpeg", ".webp", ".webm"}:
+            continue
+        records = git_output_at(
+            repository, "ls-tree", "-z", tree, "--", ":(literal)" + name
+        ).split("\0")
+        for record in filter(None, records):
+            metadata, path = record.split("\t", 1)
+            mode, kind, oid = metadata.split()
+            if mode != "100644" or kind != "blob" or path != name:
+                raise RuntimeError("website media tree must contain a regular file")
+            size = int(git_output_at(repository, "cat-file", "-s", oid))
+            if size > IMAGE_FILE_LIMIT:
+                raise RuntimeError("website media tree blob exceeds file resource limit")
+            payload = b"".join(stream_git("cat-file", "blob", oid, cwd=repository))
+            validate_image_payload(name, payload, int(mode, 8))
+
+
 def planned_change(
     config: dict[str, Any],
     *,
     base_override: Optional[str] = None,
     fixture_manifest_bootstrap: bool = False,
+    include_patch: bool = True,
 ) -> PlannedChange:
     initial_tree_fingerprint = tree_fingerprint()
     base_ref, base_tip, base_commit = resolve_base(config, base_override)
     head_commit = git_output("rev-parse", "--verify", "HEAD^{commit}").strip()
-    tracked_diff = git_output(
-        "diff",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--binary",
-        "--no-renames",
-        "--unified=40",
-        base_commit,
-        "--",
-    )
-    if "GIT binary patch\n" in tracked_diff or "\nBinary files " in tracked_diff:
-        raise RuntimeError(
-            "local review refused because the planned tracked diff contains "
-            "binary content"
-        )
-    tracked_names = git_output(
+    tracked_names = git_exact_text(
         "diff", "--name-only", "--no-renames", "-z", base_commit, "--"
     ).split("\0")
-    max_bytes = require_positive_integer(
-        config["review"]["max_diff_bytes"],
-        "review.max_diff_bytes",
-        maximum=MAX_REVIEW_BYTES,
-    )
-    untracked_hashes: dict[str, str] = {}
-    patches: list[str] = []
-    consumed = utf8_size(tracked_diff)
-    for name in untracked_names():
-        remaining = max_bytes - consumed
-        if remaining <= 0:
+    if include_patch:
+        # Inspect immutable old and current endpoint bytes independently of
+        # diff attributes. Website JPEG/WebP and the digest-bound hero WebM
+        # retain their established bounded path policy; all other binary
+        # changes remain rejected.
+        validate_tracked_images(base_commit)
+        validate_planned_pngs(base_commit, list(filter(None, tracked_names)))
+    patch = PatchSpool() if include_patch else None
+    untracked_hashes = {}
+    try:
+        if include_patch:
+            for chunk in decoded_git_chunks(
+                "-c",
+                "core.quotePath=true",
+                "-c",
+                "diff.noprefix=false",
+                "-c",
+                "diff.mnemonicPrefix=false",
+                "-c",
+                "diff.srcPrefix=a/",
+                "-c",
+                "diff.dstPrefix=b/",
+                "-c",
+                "diff.suppressBlankEmpty=false",
+                "diff",
+                "--no-color",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--binary",
+                "--no-renames",
+                "--output-indicator-new=+",
+                "--output-indicator-old=-",
+                "--output-indicator-context= ",
+                "--unified=40",
+                base_commit,
+                "--",
+                errors="strict",
+                universal_newlines=False,
+            ):
+                patch.write(chunk.encode("utf-8"))
+            total = 0
+            for name in untracked_names():
+                digest, size = spool_untracked_patch(name, patch)
+                total += size
+                untracked_hashes[name] = digest
+            warning = review_warning_threshold(config["review"])
+            if warning is not None and patch.size >= warning:
+                print(
+                    f"Planning notice: complete diff is {patch.size} bytes (advisory threshold {warning}); all deterministic checks still run. No automatic PR splitting.",
+                    file=sys.stderr,
+                )
+        paths = tuple(sorted(set(filter(None, tracked_names)) | set(untracked_hashes)))
+        final_tree_fingerprint = tree_fingerprint()
+        if final_tree_fingerprint != initial_tree_fingerprint:
             raise RuntimeError(
-                f"planned diff exceeds local review limit of {max_bytes} bytes"
+                "Git tree changed while constructing the exact planned push patch"
             )
-        payload, mode = read_repository_file(
-            name,
-            purpose="Local review",
-            max_bytes=remaining,
+        change = PlannedChange(
+            base_ref,
+            base_tip,
+            base_commit,
+            head_commit,
+            patch,
+            paths,
+            untracked_hashes,
+            final_tree_fingerprint,
         )
-        patch = render_untracked_patch(name, payload, mode)
-        patch_bytes = utf8_size(patch)
-        consumed += patch_bytes
-        if consumed > max_bytes:
-            raise RuntimeError(
-                f"planned diff exceeds local review limit of {max_bytes} bytes"
+        if include_patch:
+            ensure_review_safe(
+                change,
+                secret_fixture_manifest_for_change(
+                    change, bootstrap=fixture_manifest_bootstrap
+                ),
             )
-        patches.append(patch)
-        untracked_hashes[name] = sha256_bytes(payload)
-    diff = tracked_diff + "".join(patches)
-    if utf8_size(diff) > max_bytes:
-        raise RuntimeError(
-            f"planned diff exceeds local review limit of {max_bytes} bytes"
-        )
-    paths = tuple(
-        sorted(
-            {
-                path
-                for path in tracked_names
-                if path
-            }
-            | set(untracked_hashes)
-        )
-    )
-    final_tree_fingerprint = tree_fingerprint()
-    if final_tree_fingerprint != initial_tree_fingerprint:
-        raise RuntimeError(
-            "Git tree changed while constructing the exact planned push patch"
-        )
-    change = PlannedChange(
-        base_ref=base_ref,
-        base_tip=base_tip,
-        base_commit=base_commit,
-        head_commit=head_commit,
-        diff=diff,
-        paths=paths,
-        untracked_sha256=untracked_hashes,
-        tree_fingerprint=final_tree_fingerprint,
-    )
-    ensure_review_safe(
-        change,
-        secret_fixture_manifest_for_change(
-            change,
-            bootstrap=fixture_manifest_bootstrap,
-        ),
-    )
-    return change
+            if any(
+                Path(name).suffix in {".jpeg", ".jpg", ".png", ".webm", ".webp"}
+                for name in change.paths
+            ):
+                # Admit only bytes from the exact patch's verified integration tree.
+                # This also covers staged/unstaged attribute transformations.
+                with sanitized_review_workspace(
+                    change, fixture_manifest_bootstrap=fixture_manifest_bootstrap
+                ):
+                    pass
+            if tree_fingerprint() != final_tree_fingerprint:
+                raise RuntimeError(
+                    "Git tree changed while scanning the exact planned push patch"
+                )
+        return change
+    except BaseException:
+        if hasattr(patch, "text_chunks"):
+            patch.close()
+        raise
 
 
 def changed_paths() -> list[str]:
@@ -2117,7 +3612,8 @@ def planned_diff(
 ) -> str:
     if config is None:
         config = load_config()
-    return planned_change(config, base_override=base_override).diff
+    value = planned_change(config, base_override=base_override).diff
+    return value.as_text() if hasattr(value, "text_chunks") else value
 
 
 def untracked_review_text(max_bytes: int = 1_000_000) -> str:
@@ -2174,9 +3670,14 @@ def parse_secret_fixture_manifest(
         path = entry["path"]
         encoded = entry["line_hex"]
         line_number = entry["line_number"]
-        if entry["purpose"] != "synthetic-test-fixture":
+        purpose = entry["purpose"]
+        if not isinstance(purpose, str) or purpose not in {
+            "synthetic-test-fixture",
+            "synthetic-documentation-example",
+        }:
             raise RuntimeError(
-                "secret fixture manifest purpose must be synthetic-test-fixture"
+                "secret fixture manifest purpose must be synthetic-test-fixture "
+                "or synthetic-documentation-example"
             )
         if (
             isinstance(line_number, bool)
@@ -2199,7 +3700,12 @@ def parse_secret_fixture_manifest(
             )
             or Path(path).as_posix() != path
             or any(part in {"", ".", "..", ".git"} for part in Path(path).parts)
-            or not path.startswith(SECRET_FIXTURE_PATH_PREFIXES)
+            or not (
+                (purpose == "synthetic-test-fixture"
+                 and path.startswith(SECRET_FIXTURE_PATH_PREFIXES))
+                or (purpose == "synthetic-documentation-example"
+                    and SYNTHETIC_DOCUMENTATION_PATH_PATTERN.fullmatch(path))
+            )
         ):
             raise RuntimeError("secret fixture manifest contains an unsafe path")
         if (
@@ -2227,6 +3733,10 @@ def parse_secret_fixture_manifest(
         if not line or "\n" in line or "\r" in line:
             raise RuntimeError(
                 "secret fixture manifest entries must encode one non-empty line"
+            )
+        if PEM_KEY_BEGIN_BOUNDARY_PATTERN.search(line):
+            raise RuntimeError(
+                "secret fixture manifest may not authorize PEM private key beginnings"
             )
         if not any(pattern.search(line) for pattern in SECRET_CONTENT_PATTERNS):
             raise RuntimeError(
@@ -2382,6 +3892,24 @@ def mask_documented_secret_fixture_lines(
     return "\n".join(masked)
 
 
+def mask_packer_variable_references(
+    value: str,
+    *,
+    path: Optional[str] = None,
+) -> str:
+    """Exclude bare Packer variables only in marker-free tracked HCL files."""
+    if path is None or not path.endswith(".pkr.hcl") or any(
+        marker in value for marker in ("/*", "*/", "<<")
+    ):
+        return value
+    return "\n".join(
+        "PACKER_VARIABLE_REFERENCE"
+        if PACKER_VARIABLE_REFERENCE_LINE.fullmatch(line)
+        else line
+        for line in value.splitlines()
+    )
+
+
 def documented_secret_fixture_matches(
     documented: dict[str, dict[int, tuple[str, str]]],
     path: Optional[str],
@@ -2454,37 +3982,54 @@ def mask_documented_secret_fixture_diff(
     return "\n".join(masked)
 
 
-def ensure_review_safe(
-    change: PlannedChange,
+def redact_removed_sensitive_lines(
+    diff: str,
     documented: Optional[dict[str, dict[int, tuple[str, str]]]] = None,
-) -> None:
-    unsafe = []
-    for path in change.paths:
-        if is_secret_like_path(path):
-            unsafe.append(path)
-    if unsafe:
+    retired: Optional[dict[str, dict[int, str]]] = None,
+) -> str:
+    """Hide removed single-line values outside governed fixture paths."""
+    governed = {path: dict(entries) for path, entries in (documented or {}).items()}
+    for path, entries in (retired or {}).items():
+        if path in governed:
+            raise RuntimeError("retired fixture overlaps the secret fixture manifest")
+        governed[path] = {
+            line_number: (digest, "") for line_number, digest in entries.items()
+        }
+    diff = mask_documented_secret_fixture_diff(diff, governed)
+    if PEM_KEY_BOUNDARY_PATTERN.search(diff):
         raise RuntimeError(
-            "local review refused for secret-like paths: "
-            + ", ".join(sorted(unsafe))
+            "local review refused because the planned patch contains "
+            "PEM private key material"
         )
-    scanned_diff = mask_documented_secret_fixture_lines(
-        change.diff,
-        documented or {},
-        diff=True,
-    )
-    if any(pattern.search(scanned_diff) for pattern in SECRET_CONTENT_PATTERNS):
-        raise RuntimeError(
-            "local review refused because the planned review input contains "
-            "secret-like content"
-        )
-    if (
-        any(Path(path).name.lower() == ".npmrc" for path in change.paths)
-        and NPMRC_AUTH_PATTERN.search(change.diff)
-    ):
-        raise RuntimeError(
-            "local review refused because planned .npmrc content contains "
-            "authentication configuration"
-        )
+    redacted: list[str] = []
+    governed_paths = frozenset(governed)
+    old_path: Optional[str] = None
+    in_hunk = False
+    for line in diff.splitlines():
+        if line.startswith("diff --git "):
+            old_path = None
+            in_hunk = False
+        elif not in_hunk and line.startswith("--- "):
+            old_path = unquote_diff_path(line[4:], "a")
+        elif re.match(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@", line):
+            in_hunk = True
+        elif (
+            in_hunk
+            and old_path is not None
+            and old_path not in governed_paths
+            and line.startswith("-")
+            and (
+                any(pattern.search(line[1:]) for pattern in SECRET_CONTENT_PATTERNS[1:])
+                or NPMRC_AUTH_PATTERN.search(line[1:])
+            )
+        ):
+            line = "-<REDACTED REMOVED SENSITIVE LINE>"
+        redacted.append(line)
+    return "\n".join(redacted)
+
+
+def ensure_review_safe(change: PlannedChange, documented=None) -> None:
+    streaming_review_safe(change, documented or {}, redact=True)
 
 
 def checkout_sanitized_commit(
@@ -2550,7 +4095,7 @@ def checkout_sanitized_commit(
             "could not fetch sanitized review commit: " + fetched.stdout.strip()
         )
     checked_out = run(
-        ["git", "checkout", "-q", "--detach", "FETCH_HEAD"],
+        ["git", "checkout", "-q", "--detach", commit],
         capture=True,
         cwd=destination,
     )
@@ -2729,8 +4274,8 @@ def sanitized_review_workspace(
                 builder,
                 disabled_hooks,
             )
-            if change.diff:
-                applied = run(
+            if change.patch:
+                applied = apply_patch_stream(
                     [
                         "git",
                         "-c",
@@ -2743,7 +4288,7 @@ def sanitized_review_workspace(
                         "-",
                     ],
                     capture=True,
-                    input_text=change.diff,
+                    patch=change.patch,
                     cwd=builder,
                 )
                 if applied.returncode:
@@ -2762,6 +4307,8 @@ def sanitized_review_workspace(
                     "sanitized review tree does not match the synthetic "
                     "pull-request integration tree"
                 )
+            validate_png_tree(builder, integration_tree, list(change.paths))
+            validate_website_media_tree(builder, integration_tree, list(change.paths))
             root_commit = sanitized_root_commit(builder, integration_tree)
             checkout_sanitized_commit(
                 builder,
@@ -2797,67 +4344,8 @@ def sanitized_review_workspace(
         yield workspace, root, topology
 
 
-def ensure_workspace_review_safe(
-    workspace: Path,
-    documented: Optional[dict[str, dict[int, tuple[str, str]]]] = None,
-) -> None:
-    """Scan the complete tracked snapshot before local evidence is accepted."""
-    names = git_output_at(workspace, "ls-files", "-z").split("\0")
-    total = 0
-    unsafe_paths: list[str] = []
-    sensitive_basenames = {
-        ".env",
-        ".netrc",
-        ".pypirc",
-        "auth.json",
-        "credentials",
-        "credentials.json",
-        "id_ed25519",
-        "id_rsa",
-        "kubeconfig",
-        "vault-password",
-    }
-    sensitive_directories = {".aws", ".ssh", "secrets"}
-    for name in (entry for entry in names if entry):
-        parts = tuple(part.lower() for part in Path(name).parts)
-        if (
-            parts[-1] in sensitive_basenames
-            or any(part in sensitive_directories for part in parts[:-1])
-        ):
-            unsafe_paths.append(name)
-        candidate = workspace / name
-        if not candidate.is_file() or candidate.is_symlink():
-            raise RuntimeError(
-                f"sanitized review path is not a regular file: {name}"
-            )
-        payload = candidate.read_bytes()
-        total += len(payload)
-        if total > 500_000_000:
-            raise RuntimeError("sanitized review secret scan exceeds 500 MB")
-        # Preserve every ASCII secret marker even when an unchanged tracked
-        # binary contains invalid UTF-8. New or changed binary content is
-        # rejected from the planned diff before workspace creation.
-        text_value = payload.decode("utf-8", errors="replace")
-        if parts[-1] == ".npmrc" and NPMRC_AUTH_PATTERN.search(text_value):
-            raise RuntimeError(
-                "local review refused because tracked .npmrc contains "
-                "authentication configuration"
-            )
-        scanned_value = mask_documented_secret_fixture_lines(
-            text_value,
-            documented or {},
-            path=name,
-        )
-        if any(pattern.search(scanned_value) for pattern in SECRET_CONTENT_PATTERNS):
-            raise RuntimeError(
-                "local review refused because the tracked review snapshot "
-                f"contains secret-like content in {name}"
-            )
-    if unsafe_paths:
-        raise RuntimeError(
-            "local review refused for secret-like tracked paths: "
-            + ", ".join(sorted(unsafe_paths))
-        )
+def ensure_workspace_review_safe(workspace: Path, documented=None) -> None:
+    streaming_workspace_safe(workspace, documented or {}, allow_packer=True)
 
 
 def tracked_instruction_bundle(workspace: Path) -> str:
@@ -2874,7 +4362,9 @@ def tracked_instruction_bundle(workspace: Path) -> str:
             raise RuntimeError(
                 f"sanitized instruction is not a regular file: {name}"
             )
-        payload = candidate.read_bytes()
+        descriptor = open_regular_below(workspace, name, purpose="Tracked instruction")
+        with os.fdopen(descriptor, "rb") as stream:
+            payload = stream.read(2_000_001 - total)
         total += len(payload)
         if total > 2_000_000:
             raise RuntimeError("tracked instruction bundle exceeds 2 MB")
@@ -3318,7 +4808,7 @@ def review_prompt(
         "checks remain mandatory."
     )
     task = (
-        "Review the exact planned push patch below against AGENTS.md, nested "
+        "Review the planned push patch below against AGENTS.md, nested "
         "AGENTS.md files, and .github/copilot-instructions.md. Check "
         "correctness, security, failure behavior, tests, scope, and likely "
         "GitHub Actions failures. The patch combines committed, staged, "
@@ -3330,9 +4820,10 @@ def review_prompt(
         "parents, and history objects are intentionally absent from the "
         "workspace; their absence is a security boundary, not a finding. The "
         "caller-verified hashes below bind the source topology without "
-        "exposing its content history. Do not modify files, use network "
-        "tools, or expose credentials. The embedded patch is authoritative "
-        "for review scope."
+        "exposing its content history. Old sensitive lines removed by the "
+        "patch are redacted; inspect the final synthetic tree to assess their "
+        "replacement. Do not modify files, use network tools, or expose "
+        "credentials. The embedded patch is authoritative for review scope."
     )
     if agent == "copilot":
         verdict = (
@@ -3373,9 +4864,17 @@ def review_prompt(
         + "\n----- BEGIN TRACKED REVIEW INSTRUCTIONS -----\n"
         + instructions
         + "\n----- END TRACKED REVIEW INSTRUCTIONS -----\n"
-        + "\n----- BEGIN EXACT PLANNED PUSH PATCH -----\n"
-        + change.diff
-        + "\n----- END EXACT PLANNED PUSH PATCH -----\n"
+        + "\n----- BEGIN PLANNED PUSH PATCH (REMOVED SENSITIVE LINES REDACTED) -----\n"
+        + redact_removed_sensitive_lines(
+            change.diff,
+            # Ordinary removed secrets use generic redaction. Only a PEM
+            # boundary needs an authenticated fixture lookup for masking.
+            secret_fixture_manifest_for_change(change)
+            if PEM_KEY_BOUNDARY_PATTERN.search(change.diff)
+            else {},
+            retired_source_fixture_lines(change),
+        )
+        + "\n----- END PLANNED PUSH PATCH -----\n"
     )
 
 
@@ -4164,9 +5663,10 @@ def main() -> int:
         if args.command == "validate":
             require_clean_head()
             refresh_authoritative_base(config)
-            change = planned_change(config)
+            change = planned_change(config, include_patch=False)
             require_trusted_check_policy(change)
             execute_integration_checks(config, change)
+            planned_change(config)
             return 0
         if args.command == "review":
             if args.fixture_manifest_bootstrap:
@@ -4190,6 +5690,7 @@ def main() -> int:
         refresh_authoritative_base(config)
         change = planned_change(
             config,
+            include_patch=False,
             fixture_manifest_bootstrap=args.fixture_manifest_bootstrap,
         )
         require_trusted_check_policy(
@@ -4241,11 +5742,18 @@ def main() -> int:
         return 0
     except (
         OSError,
+        MemoryError,
+        UnicodeError,
         RuntimeError,
         json.JSONDecodeError,
         subprocess.SubprocessError,
     ) as exc:
-        print(f"push-ready: {exc}", file=sys.stderr)
+        message = (
+            "operational memory exhaustion; no validation evidence accepted"
+            if isinstance(exc, MemoryError)
+            else str(exc)
+        )
+        print(f"push-ready: {message}", file=sys.stderr)
         return 1
 
 
