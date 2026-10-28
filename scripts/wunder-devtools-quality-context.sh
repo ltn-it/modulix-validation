@@ -253,6 +253,10 @@ status=0
   --mount "type=bind,source=$action,destination=/controller,readonly" \
   --mount "type=bind,source=$cell,destination=/quality" \
   "${runtime_env[@]}" "$image" python3 /controller/run-cell.py || status=$?
+# A result/package can predate a late signal after the driver restores its
+# handlers. Signal-style exits cannot publish even diagnostic upload outputs.
+# Preserve the private cell for the separately owned recovery/collector path.
+(( status < 128 )) || fail "runtime interrupted; private state retained"
 # Never discard unconfirmed state at expiry. Custodian/collector handling is
 # separate; missing/expired custody or tampered ownership cannot publish PASS.
 observed=$(date -u +%s) || fail "retention clock unavailable"

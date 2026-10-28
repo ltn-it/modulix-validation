@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -621,10 +622,29 @@ class ProtectedIncusContextTests(unittest.TestCase):
                 self.assertNotEqual(0, result.returncode)
                 self.assertEqual("", self.output.read_text())
 
+    def test_interrupted_runtime_never_publishes_even_a_canonical_result_package(self):
+        original = self.engine.read_text()
+        for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGKILL):
+            for success in (True, False):
+                with self.subTest(signum=signum, success=success):
+                    self.output.write_text("")
+                    content = original if success else original.replace("'success':True", "'success':False")
+                    self.engine.write_text(content +
+                        f"import os, signal; os.kill(os.getpid(), {int(signum)})\n")
+                    result = self.invoke()
+                    self.assertNotEqual(0, result.returncode)
+                    self.assertEqual("", self.output.read_text())
+                    runtime = next(call for call in reversed(self.calls()) if "QUALITY_CONTEXT_PHASE=runtime" in call)
+                    mount = next(value for value in runtime if "destination=/quality" in value)
+                    cell = Path(mount.split("source=", 1)[1].split(",", 1)[0])
+                    self.assertTrue((cell / "control/result.json").is_file())
+                    self.assertTrue((cell / "package/result.tar.gz").is_file())
+
     def test_canonical_diagnostic_results_preserve_outputs_and_failure(self):
         original = self.engine.read_text()
         for content in (
             original.replace("'success':True", "'success':False"),
+            original.replace("'success':True", "'success':False") + "raise SystemExit(1)\n",
             original + "raise SystemExit(23)\n",
         ):
             with self.subTest(engine=content[-40:]):
