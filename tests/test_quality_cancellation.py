@@ -13,12 +13,105 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 DRIVER = ROOT / ".github/actions/run-quality-profile/run-cell.py"
 
 
 class QualityCancellationTests(unittest.TestCase):
+    def test_failed_start_authorization_closes_descriptors_and_never_executes_shell(self):
+        spec = importlib.util.spec_from_file_location("cell", DRIVER)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        original_pipe = module.os.pipe
+        pipes = []
+
+        def pipe():
+            descriptors = original_pipe()
+            pipes.append(descriptors)
+            return descriptors
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with (module.Cancellation() as cancellation,
+                  mock.patch.object(module.os, "pipe", side_effect=pipe),
+                  mock.patch.object(module.os, "write", side_effect=OSError("fixture denied release")),
+                  self.assertRaises(OSError)):
+                module.run_owned_process('touch "$FIXTURE_ROOT/ordinary-effect"', root,
+                                         {**os.environ, "FIXTURE_ROOT": str(root)}, cancellation)
+            self.assertFalse((root / "ordinary-effect").exists())
+            self.assertIsNone(cancellation.active)
+            for descriptor in pipes[0]:
+                with self.assertRaises(OSError):
+                    os.fstat(descriptor)
+
+    def test_between_step_and_process_creation_cancellation_prevents_ordinary_effects(self):
+        for point in ("environment", "expansion", "process-creation"):
+            for signum in (signal.SIGINT, signal.SIGTERM):
+                with self.subTest(point=point, signum=signum):
+                    self.exercise_start_boundary(point, signum)
+
+    def exercise_start_boundary(self, point, signum):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            spec = importlib.util.spec_from_file_location("cell", DRIVER)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            original_values = module.private_values
+            original_expand = module.expand
+            original_launch = module.subprocess.Popen
+            environment_reads = 0
+            ordinary_launches = []
+
+            def values(path, *, environment=False):
+                nonlocal environment_reads
+                if environment:
+                    environment_reads += 1
+                    if point == "environment" and environment_reads == 2:
+                        os.kill(os.getpid(), signum)
+                return original_values(path, environment=environment)
+
+            def expand(value, inputs, results):
+                if point == "expansion" and "ordinary-effect" in value:
+                    os.kill(os.getpid(), signum)
+                return original_expand(value, inputs, results)
+
+            def launch(command, **kwargs):
+                process = original_launch(command, **kwargs)
+                if "ordinary-effect" in command[-1]:
+                    ordinary_launches.append(process)
+                    if point == "process-creation":
+                        os.kill(os.getpid(), signum)
+                    # Hold the real Popen return before registration.
+                    # A gated child must remain unable to touch this marker.
+                    deadline = time.monotonic() + 0.3
+                    while not (root / "ordinary-effect").exists() and time.monotonic() < deadline:
+                        time.sleep(0.005)
+                return process
+
+            steps = [
+                {"id": "initialize", "run": ":"},
+                {"id": "molecule", "run": 'touch "$FIXTURE_ROOT/ordinary-effect"'},
+                {"id": "cleanup", "if": "always()", "run": 'echo capture >> "$FIXTURE_ROOT/calls"'},
+                {"id": "destroy", "if": "always()", "run": 'echo destroy >> "$FIXTURE_ROOT/calls"'},
+                {"id": "package", "if": "always()", "run": 'touch "$FIXTURE_ROOT/unowned-effect"'},
+            ]
+            previous = {kind: signal.getsignal(kind) for kind in (signal.SIGINT, signal.SIGTERM)}
+            with (mock.patch.object(module, "private_values", side_effect=values),
+                  mock.patch.object(module, "expand", side_effect=expand),
+                  mock.patch.object(module.subprocess, "Popen", side_effect=launch),
+                  self.assertRaises(module.CellCancelled) as caught):
+                module.run_steps(steps, {}, {**os.environ, "FIXTURE_ROOT": str(root)},
+                                 root / "control", root)
+            self.assertEqual(signum, caught.exception.signum)
+            self.assertFalse((root / "ordinary-effect").exists())
+            self.assertFalse((root / "unowned-effect").exists())
+            self.assertEqual(["capture", "destroy"], (root / "calls").read_text().splitlines())
+            for process in ordinary_launches:
+                self.assertIsNotNone(process.poll())
+            self.assertTrue(all(signal.getsignal(kind) == handler for kind, handler in previous.items()))
+
     def test_recovery_never_replaces_existing_data_or_follows_a_symlink(self):
         spec = importlib.util.spec_from_file_location("cell", DRIVER)
         module = importlib.util.module_from_spec(spec)

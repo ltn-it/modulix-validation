@@ -43,6 +43,16 @@ INPUTS = (
 CANCEL_FINALIZER_SECONDS = 120
 PROCESS_STOP_SECONDS = 2
 OWNED_FINALIZERS = {"cleanup", "destroy"}
+# This trusted child cannot execute the ordinary command until its parent has
+# registered the process and explicitly admitted startup. EOF denies startup.
+OWNED_SHELL_LAUNCHER = """import os, sys
+descriptor = int(sys.argv[1])
+token = os.read(descriptor, 1)
+os.close(descriptor)
+if token != b'1':
+    raise SystemExit(125)
+os.execv('/bin/bash', ['/bin/bash', '-e', '-c', sys.argv[2]])
+"""
 
 
 class CellCancelled(KeyboardInterrupt):
@@ -202,29 +212,41 @@ def stop_owned_process(process):
 def run_owned_process(command, workspace, environment, cancellation):
     process = None
     stopped = False
+    read_fd = write_fd = None
     try:
+        if cancellation.signum and not cancellation.finalizing:
+            raise CellCancelled(cancellation.signum)
+        read_fd, write_fd = os.pipe()
         process = subprocess.Popen(
-            ["/bin/bash", "-e", "-c", command], cwd=workspace,
-            env=environment, start_new_session=True,
+            [sys.executable, "-I", "-S", "-c", OWNED_SHELL_LAUNCHER, str(read_fd), command],
+            cwd=workspace, env=environment, start_new_session=True,
+            pass_fds=(read_fd,),
         )
         cancellation.active = process
         if cancellation.signum and not cancellation.finalizing:
             raise CellCancelled(cancellation.signum)
+        if os.write(write_fd, b"1") != 1:
+            raise OSError("owned shell start authorization failed")
         timeout = CANCEL_FINALIZER_SECONDS if cancellation.finalizing else None
         try:
             code = process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             code = 124
     finally:
+        cancellation.stopping = True
         try:
-            # A successful shell exit can also leave timeout-owned children.
-            # Never start the next phase until this exact session is inactive.
-            if process is not None:
-                cancellation.stopping = True
-                stopped = stop_owned_process(process)
+            try:
+                for descriptor in (read_fd, write_fd):
+                    if descriptor is not None:
+                        os.close(descriptor)
+            finally:
+                # A successful shell exit can also leave timeout-owned children.
+                # Never start the next phase until this exact session is inactive.
+                if process is not None:
+                    stopped = stop_owned_process(process)
         finally:
-            cancellation.stopping = False
             cancellation.active = None
+            cancellation.stopping = False
     # A parent exiting zero while work is still active is not a completed
     # phase. Even after stopping that work, never authorize a success receipt.
     return 1 if code == 0 and stopped else code
@@ -320,6 +342,10 @@ def run_steps(
                 for key, value in step.get("env", {}).items():
                     local[key] = expand(str(value), inputs, results)
                 command = expand(step["run"], inputs, results)
+                cancelled = cancellation.signum is not None
+                if cancelled and (not always or identity not in OWNED_FINALIZERS):
+                    results[identity] = {"outcome": "skipped", "outputs": {}}
+                    continue
                 cancellation.finalizing = cancelled
                 code = run_owned_process(command, workspace, local, cancellation)
                 outcome = "success" if code == 0 and not damaged else "failure"
