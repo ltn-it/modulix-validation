@@ -51,12 +51,16 @@ The active matrix currently covers:
 The AAP 2.6 entries remain documented in the matrix but are disabled because
 the current `lit.supplementary.aap_deploy` role supports AAP 2.7 only.
 
-## Required GitHub Secrets
+## GitHub Secrets
 
-Set these secrets on `lightning-it/modulix-validation`:
+Required:
 
-- `LIT_REPOSITORY_READ_TOKEN`: read-only token for the Lightning IT repositories
-  checked out by the workflow.
+- `RELEASE_AUTOMATION_APP_CLIENT_ID`: organization variable for the bounded
+  cross-repository checkout App.
+- `RELEASE_AUTOMATION_APP_PRIVATE_KEY`: organization secret for that App. The
+  workflow mints a short-lived `contents:read` token limited to the three source
+  repositories used during matrix preparation, and a separate token limited to
+  the five source repositories used by each matrix job.
 - `RH_AUTOMATION_HUB_TOKEN`: Red Hat offline token for certified collection
   installation.
 

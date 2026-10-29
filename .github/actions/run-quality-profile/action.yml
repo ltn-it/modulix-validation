@@ -443,26 +443,14 @@ runs:
       id: molecule
       shell: bash
       run: |
-        set -uo pipefail
-        set +e
-        molecule test -s "$QUALITY_SCENARIO" --destroy never 2>&1 | tee "$QUALITY_LOG_PATH"
-        test_rc="${PIPESTATUS[0]}"
-        set -e
-        echo "exit_code=$test_rc" >> "$GITHUB_OUTPUT"
-        exit 0
+        bash "${{ github.action_path }}/run-phase.sh" test 1800
 
     - name: Capture target evidence before destruction
       id: cleanup
       if: always()
       shell: bash
       run: |
-        set -uo pipefail
-        set +e
-        molecule cleanup -s "$QUALITY_SCENARIO" 2>&1 | tee -a "$QUALITY_LOG_PATH"
-        cleanup_rc="${PIPESTATUS[0]}"
-        set -e
-        echo "exit_code=$cleanup_rc" >> "$GITHUB_OUTPUT"
-        exit 0
+        bash "${{ github.action_path }}/run-phase.sh" cleanup 600
 
     - name: Bind resolved test-application dependencies
       if: always()
@@ -708,13 +696,7 @@ runs:
       if: always()
       shell: bash
       run: |
-        set -uo pipefail
-        set +e
-        molecule destroy -s "$QUALITY_SCENARIO" 2>&1 | tee -a "$QUALITY_LOG_PATH"
-        destroy_rc="${PIPESTATUS[0]}"
-        set -e
-        echo "exit_code=$destroy_rc" >> "$GITHUB_OUTPUT"
-        exit 0
+        bash "${{ github.action_path }}/run-phase.sh" destroy 600
 
     - name: Record test, capture, and destruction lifecycle status
       id: lifecycle

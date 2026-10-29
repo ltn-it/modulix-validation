@@ -53,6 +53,7 @@ jobs:
   validate-inputs:
     name: Validate delegated profile contract
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       profile: ${{ steps.contract.outputs.profile }}
     steps:
@@ -129,7 +130,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     environment:
       name: ${{ inputs['environment-name'] }}
-    timeout-minutes: 180
+    timeout-minutes: 90
     concurrency:
       # A shared group can retain only one pending job; later collection
       # requests otherwise cancel an already queued required profile. Runner
@@ -152,7 +153,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Run validation-owned infrastructure profile
-        uses: lightning-it/modulix-validation/.github/actions/run-quality-profile@7d9e9edb4eb8f6efbd025a8da74a78f2de2d2ed4
+        uses: lightning-it/modulix-validation/.github/actions/run-quality-profile@4b80722fbcc90da49dc2881facaea7dda3a2a438
         with:
           profile: ${{ needs.validate-inputs.outputs.profile }}
           scenario: ${{ matrix.scenario }}

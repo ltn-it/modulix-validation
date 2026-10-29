@@ -211,10 +211,14 @@ docs/                                      validation documentation
 
 ## Current AAP Workflow Secrets
 
-Set these secrets on `lightning-it/modulix-validation` for the current AAP
-suite:
+Required for the current AAP suite:
 
-- `LIT_REPOSITORY_READ_TOKEN`: read-only token for cross-repository checkouts.
+- `RELEASE_AUTOMATION_APP_CLIENT_ID`: organization variable for the bounded
+  cross-repository checkout App.
+- `RELEASE_AUTOMATION_APP_PRIVATE_KEY`: organization secret for that App. The
+  workflow mints a short-lived `contents:read` token limited to the three source
+  repositories used during matrix preparation, and a separate token limited to
+  the five source repositories used by each matrix job.
 - `RH_AUTOMATION_HUB_TOKEN`: Red Hat offline token for certified collection
   installation.
 
