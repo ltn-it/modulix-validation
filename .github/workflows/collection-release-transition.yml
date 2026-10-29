@@ -8,7 +8,7 @@ on:
       source_repository:
         description: Collection repository that produced the immutable release.
         required: true
-        default: lightning-it/ansible-collection-supplementary
+        default: ltn-it/ansible-collection-supplementary
         type: string
       source_sha:
         description: Exact 40-character release commit SHA.
@@ -38,9 +38,12 @@ jobs:
   transition-noop:
     name: Transition / Nexus promotion command (not executed)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Validate immutable release identity
+        id: identity
         env:
+          GH_TOKEN: ${{ github.token }}
           SOURCE_REPOSITORY: ${{ inputs.source_repository }}
           SOURCE_SHA: ${{ inputs.source_sha }}
           VERSION: ${{ inputs.version }}
@@ -48,7 +51,8 @@ jobs:
           ARTIFACT_NAME: ${{ inputs.artifact_name }}
         run: |
           set -euo pipefail
-          [[ "$SOURCE_REPOSITORY" =~ ^lightning-it/ansible-collection-[a-z0-9-]+$ ]]
+          [[ "$GITHUB_REPOSITORY_ID" = 1269461997 ]]
+          [[ "$SOURCE_REPOSITORY" =~ ^(ltn-it|lightning-it)/ansible-collection-(foundational|supplementary|rhel|ubuntu|ocp|cloud)$ ]]
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]
           [[ "$ARTIFACT_SHA256" =~ ^[0-9a-f]{64}$ ]]
@@ -58,6 +62,18 @@ jobs:
           test "$artifact_stem" != "$ARTIFACT_NAME"
           [[ "$artifact_stem" =~ ^[a-z0-9_]+-[a-z0-9_]+$ ]]
           test "$ARTIFACT_NAME" = "${artifact_stem}${artifact_suffix}"
+          case "${SOURCE_REPOSITORY#*/}" in
+            ansible-collection-foundational) expected_repository_id=1103405635 ;;
+            ansible-collection-supplementary) expected_repository_id=1103407173 ;;
+            ansible-collection-rhel) expected_repository_id=1103411913 ;;
+            ansible-collection-ubuntu) expected_repository_id=1268102957 ;;
+            ansible-collection-ocp) expected_repository_id=1103410706 ;;
+            ansible-collection-cloud) expected_repository_id=1318852819 ;;
+            *) exit 1 ;;
+          esac
+          actual_repository_id="$(gh api "repos/${SOURCE_REPOSITORY}" --jq .id)"
+          test "$actual_repository_id" = "$expected_repository_id"
+          echo "repository_id=$actual_repository_id" >> "$GITHUB_OUTPUT"
 
       - name: Describe target Nexus-to-Galaxy promotion without executing it
         env:
@@ -75,6 +91,7 @@ jobs:
       - name: Persist explicit transition evidence
         env:
           SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          SOURCE_REPOSITORY_ID: ${{ steps.identity.outputs.repository_id }}
           SOURCE_SHA: ${{ inputs.source_sha }}
           VERSION: ${{ inputs.version }}
           ARTIFACT_SHA256: ${{ inputs.artifact_sha256 }}
@@ -89,6 +106,7 @@ jobs:
               "schema_version": 1,
               "mode": "transition-noop",
               "repository": os.environ["SOURCE_REPOSITORY"],
+              "repository_id": int(os.environ["SOURCE_REPOSITORY_ID"]),
               "source_sha": os.environ["SOURCE_SHA"],
               "version": os.environ["VERSION"],
               "artifact": {
