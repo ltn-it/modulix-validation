@@ -170,7 +170,8 @@ class QualityCancellationTests(unittest.TestCase):
                       destroy="success", repeat=False, interrupt_destroy=False,
                       damaged_environment=False, normal_failure=False,
                       repeat_during_stop=False, interrupt_capture=False,
-                      interrupt_after_destroy=False, unowned_finalizer=False):
+                      interrupt_after_destroy=False, unowned_finalizer=False,
+                      result_artifact="fixture-result"):
         root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         cell = root / "cell"
         cell.mkdir(mode=0o700)
@@ -193,7 +194,7 @@ class QualityCancellationTests(unittest.TestCase):
         command_assignment = shlex.quote("KEYCLOAK_TEST_PASSWORD=" + self.command_canary)
         initialize = (
             f'echo {command_assignment} >> "$GITHUB_ENV"; '
-            'echo QUALITY_RESULT_ARTIFACT=fixture-result >> "$GITHUB_ENV"; '
+            f'echo {shlex.quote("QUALITY_RESULT_ARTIFACT=" + result_artifact)} >> "$GITHUB_ENV"; '
         )
         if before_state:
             initialize += active_command

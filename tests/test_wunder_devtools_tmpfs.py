@@ -282,6 +282,28 @@ class ProtectedIncusContextTests(unittest.TestCase):
         self.assertNotIn(str(self.output), " ".join(runtime))
         self.assertEqual(2, len(self.output.read_text().splitlines()))
 
+    def test_unconfirmed_finalizers_never_publish_even_with_a_completed_result(self):
+        original = self.engine.read_text()
+        anchor = "  (state/'control/result.json').chmod(0o600)\n"
+        self.assertEqual(1, original.count(anchor))
+        for success, code in ((False, 1), (True, 0), (False, 0), (True, 1)):
+            with self.subTest(success=success, code=code):
+                self.output.write_text("")
+                current = original.replace("'success':True", f"'success':{success}")
+                self.engine.write_text(current.replace(anchor, anchor +
+                    "  (state/'tmp').mkdir(mode=0o700); (state/'tmp/state').write_text('private-owned-state')\n"
+                    "  (state/'recovery').mkdir(mode=0o700)\n"
+                    "  (state/'recovery/context.json').write_text('private-unconfirmed-finalizers')\n"
+                    f"  raise SystemExit({code})\n"))
+                result = self.invoke()
+                self.assertNotEqual(0, result.returncode)
+                self.assertEqual("", self.output.read_text())
+                runtime = [call for call in self.calls() if "QUALITY_CONTEXT_PHASE=runtime" in call][-1]
+                mount = next(value for value in runtime if "destination=/quality" in value)
+                cell = Path(mount.split("source=", 1)[1].split(",", 1)[0])
+                self.assertEqual("private-owned-state", (cell / "tmp/state").read_text())
+                self.assertTrue((cell / "recovery/context.json").is_file())
+
     def test_unconfirmed_recovery_survives_runner_temp_job_cleanup(self):
         original = self.engine.read_text()
         anchor = "  (state/'control').mkdir(); (state/'package').mkdir()"

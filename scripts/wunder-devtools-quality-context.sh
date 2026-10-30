@@ -271,6 +271,9 @@ owned_file "$custody"
    $(stat -c %a -- "$recovery_root") == 700 ]] || fail "custody permissions changed; private state retained"
 observed_policy=$(sha256sum -- "$custody") || fail "custody binding unreadable; private state retained"
 [[ ${observed_policy%% *} == "$policy_digest" ]] || fail "custody binding changed; private state retained"
+# Unconfirmed finalizers retain a private recovery marker even on ordinary
+# exit1. That state is never eligible for public diagnostic upload outputs.
+[[ ! -e $cell/recovery && ! -L $cell/recovery ]] || fail "finalizers unconfirmed; private state retained"
 result="$cell/control/result.json"
 owned_file "$result"
 [[ $(stat -c %s -- "$result") -le 4096 && $(stat -c %a -- "$result") == 600 ]] || fail "invalid result file"
