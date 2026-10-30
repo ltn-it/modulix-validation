@@ -1,0 +1,91 @@
+# yamllint disable rule:line-length
+---
+name: Validate protected collection candidate context
+description: Bind canonical request and native producer/controller runs before protected access.
+inputs:
+  request-id:
+    required: true
+    description: SHA-256 of the canonical request.
+  request-json:
+    required: true
+    description: Complete immutable v2 request.
+  nexus-repository:
+    required: true
+    description: Protected configured hosted repository name; empty fails closed.
+  nexus-repository-url:
+    required: true
+    description: Protected configured HTTPS repository URL; empty fails closed.
+outputs:
+  source-sha:
+    value: ${{ steps.request.outputs.source-sha }}
+    description: Validated exact producer source SHA.
+  source-run-id:
+    value: ${{ steps.request.outputs.source-run-id }}
+    description: Validated native producer run.
+  source-run-attempt:
+    value: ${{ steps.request.outputs.source-run-attempt }}
+    description: Validated producer attempt.
+runs:
+  using: composite
+  steps:
+    - name: Reject nonprotected or non-App invocation
+      shell: bash
+      env:
+        REF: ${{ github.ref }}
+        ACTOR: ${{ github.actor }}
+        ACTOR_ID: ${{ github.actor_id }}
+        TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        EVENT: ${{ github.event_name }}
+        ATTEMPT: ${{ github.run_attempt }}
+      run: |
+        set -euo pipefail
+        test "$REF" = refs/heads/main
+        test "$ACTOR" = 'lightning-it-release-automation[bot]'
+        test "$TRIGGERING_ACTOR" = "$ACTOR"
+        test "$ACTOR_ID" = 307565056
+        test "$EVENT" = workflow_dispatch
+        test "$ATTEMPT" = 1
+    - name: Materialize nonsecret request and protected endpoint policy
+      shell: bash
+      env:
+        REQUEST_JSON: ${{ inputs.request-json }}
+        NEXUS_REPOSITORY: ${{ inputs.nexus-repository }}
+        NEXUS_REPOSITORY_URL: ${{ inputs.nexus-repository-url }}
+      run: |
+        set -euo pipefail
+        umask 077
+        echo 'WUNDER_DEVTOOLS_RUN_AS_HOST_UID=1' >> "$GITHUB_ENV"
+        mkdir -p .candidate-control
+        printf '%s' "$REQUEST_JSON" > .candidate-control/request.json
+        jq -n --arg repository "$NEXUS_REPOSITORY" --arg url "$NEXUS_REPOSITORY_URL" \
+          '{repository:$repository,url:$url}' > .candidate-control/config.json
+    - name: Validate canonical hash and configured destination before API/credentials
+      id: request
+      shell: bash
+      env:
+        REQUEST_ID: ${{ inputs.request-id }}
+        CONTROLLER_SHA: ${{ github.sha }}
+      run: |
+        set -euo pipefail
+        scripts/wunder-devtools-ee.sh python3 scripts/collection_candidate_receiver.py request \
+          --request-id "$REQUEST_ID" --controller-sha "$CONTROLLER_SHA" >> "$GITHUB_OUTPUT"
+    - name: Read exact native identities
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SOURCE_RUN_ID: ${{ steps.request.outputs.source-run-id }}
+      run: |
+        set -euo pipefail
+        gh api "repos/ltn-it/ansible-collection-supplementary/actions/runs/$SOURCE_RUN_ID" \
+          > .candidate-control/producer-run.json
+        gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+          > .candidate-control/controller-run.json
+    - name: Independently verify producer and controller bindings
+      shell: bash
+      env:
+        REQUEST_ID: ${{ inputs.request-id }}
+        CONTROLLER_SHA: ${{ github.sha }}
+      run: |
+        set -euo pipefail
+        scripts/wunder-devtools-ee.sh python3 scripts/collection_candidate_receiver.py validate \
+          --request-id "$REQUEST_ID" --controller-sha "$CONTROLLER_SHA"

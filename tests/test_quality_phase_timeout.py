@@ -5,9 +5,9 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import yaml
-
 
 ROOT = Path(__file__).resolve().parents[1]
 ACTION_DIR = ROOT / ".github/actions/run-quality-profile"
@@ -16,12 +16,43 @@ WORKFLOW = ROOT / ".github/workflows/collection-quality-profile.yml"
 
 
 class QualityPhaseTimeoutTests(unittest.TestCase):
+    def setUp(self):
+        # Keep the reviewed worktree metadata read-only while each fixture's
+        # setup and phase processes use their own repository. Cleanup restores
+        # the inherited caller environment, including linked-worktree bindings.
+        environment = {key: value for key, value in os.environ.items()
+                       if key not in {"GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE"}}
+        isolation = mock.patch.dict(os.environ, environment, clear=True)
+        isolation.start()
+        self.addCleanup(isolation.stop)
+
+    def test_fixture_execution_restores_caller_git_environment(self):
+        bindings = {"GIT_DIR": "/unavailable/caller/git",
+                    "GIT_COMMON_DIR": "/unavailable/caller/common",
+                    "GIT_WORK_TREE": "/unavailable/caller/worktree"}
+        with mock.patch.dict(os.environ, bindings):
+            case = type(self)("test_hung_test_records_timeout_and_later_phases_still_run")
+            result = unittest.TestResult()
+            case.run(result)
+            self.assertTrue(result.wasSuccessful(), result.errors + result.failures)
+            self.assertEqual(bindings, {key: os.environ.get(key) for key in bindings})
+
     def test_hung_test_records_timeout_and_later_phases_still_run(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            molecule = root / "molecule"
+            subprocess.run(["git", "init", "--quiet", str(root)], check=True, capture_output=True)
+            scenario = root / "molecule/fixture/molecule.yml"
+            scenario.parent.mkdir(parents=True)
+            scenario.write_text("driver: {name: default}\nplatforms: [{name: offline-instance}]\nprovisioner: {name: ansible}\n")
+            base = root / ".config/molecule/config.yml"
+            base.parent.mkdir(parents=True)
+            base.write_text("prerun: false\n")
+            bin_directory = root / "bin"
+            bin_directory.mkdir()
+            molecule = bin_directory / "molecule"
             molecule.write_text(
                 "#!/usr/bin/env bash\n"
+                "while [ \"$1\" = --base-config ]; do shift 2; done\n"
                 "printf '%s\\n' \"$1\" >> \"$MOLECULE_CALLS\"\n"
                 "if [ \"$1\" = test ]; then\n"
                 "  echo test-started\n"
@@ -37,7 +68,9 @@ class QualityPhaseTimeoutTests(unittest.TestCase):
             calls = root / "calls"
             env = {
                 **os.environ,
-                "PATH": f"{root}:{os.environ['PATH']}",
+                "PATH": f"{bin_directory}:{os.environ['PATH']}",
+                "QUALITY_INCUS_PROJECT": "bound-test-project",
+                "TMPDIR": directory,
                 "QUALITY_SCENARIO": "fixture",
                 "QUALITY_LOG_PATH": str(log),
                 "GITHUB_OUTPUT": str(output),
@@ -47,6 +80,7 @@ class QualityPhaseTimeoutTests(unittest.TestCase):
                 result = subprocess.run(
                     ["bash", str(PHASE_SCRIPT), phase, duration],
                     env=env,
+                    cwd=root,
                     capture_output=True,
                     text=True,
                     timeout=8,
@@ -66,8 +100,8 @@ class QualityPhaseTimeoutTests(unittest.TestCase):
             self.assertIn("destroy-completed", log.read_text(encoding="utf-8"))
 
     def test_action_gives_test_capture_and_destroy_separate_budgets(self):
-        action = yaml.safe_load((ACTION_DIR / "action.yml").read_text(encoding="utf-8"))
-        steps = {step.get("id"): step for step in action["runs"]["steps"]}
+        action = yaml.safe_load((ACTION_DIR / "profile-steps.yml").read_text(encoding="utf-8"))
+        steps = {step.get("id"): step for step in action["steps"]}
         expected = {"molecule": ("test", 1800), "cleanup": ("cleanup", 600), "destroy": ("destroy", 600)}
         for step_id, (phase, seconds) in expected.items():
             self.assertIn(
