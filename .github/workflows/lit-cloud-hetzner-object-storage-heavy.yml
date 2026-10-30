@@ -26,6 +26,7 @@ jobs:
   prepare:
     name: Validate candidate and Heavy matrix
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
@@ -63,6 +64,7 @@ jobs:
     name: Build exact candidate artifact
     needs: prepare
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -106,6 +108,7 @@ jobs:
     if: always()
     needs: [prepare, build, heavy]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - env:
           PREPARE_RESULT: ${{ needs.prepare.result }}
