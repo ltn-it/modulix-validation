@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "repository": "lightning-it/modulix-validation",
+  "mode": "reference",
+  "quality": [
+    {
+      "workflow": ".github/workflows/repository-quality.yml",
+      "job": "repository / quality"
+    },
+    {
+      "workflow": ".github/workflows/validation-contracts.yml",
+      "job": "validation / contracts"
+    }
+  ],
+  "accepted_sources": [],
+  "distribution_sources": [],
+  "artifact_publication": false
+}

@@ -1,7 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-IMAGE="quay.io/l-it/ee-wunder-devtools-ubi9:v1.16.1@sha256:c5e8707e825fcddb3e7bbc7592ebdc99a02e6ba9fa2cad71b88bcd5c71bd4d08"
+IMAGE="quay.io/l-it/ee-wunder-devtools-ubi9:v1.18.2@sha256:58955457d3410706520f34fa7ea9823d5650aa4844c562cd5c0107024d825711"
+# WUNDER_DEVTOOLS_QUALITY_CONTEXT: protected-incus-v1
+case "${1:-}" in
+  --quality-incus-v1|--quality-incus-v1-check)
+    QUALITY_HELPER="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/wunder-devtools-quality-context.sh"
+    if [ ! -f "$QUALITY_HELPER" ] || [ -L "$QUALITY_HELPER" ]; then
+      echo "Error: protected Incus managed helper is unavailable" >&2
+      exit 1
+    fi
+    exec /bin/bash "$QUALITY_HELPER" "$IMAGE" "$@"
+    ;;
+  --quality-incus-*) echo "Error: unsupported protected Incus API" >&2; exit 1 ;;
+esac
 CONTAINER_HOME="${CONTAINER_HOME:-/tmp/wunder}"
 WORKSPACE_MODE="${WUNDER_DEVTOOLS_WORKSPACE_MODE:-ro}"
 RUN_AS_HOST_UID_POLICY="${WUNDER_DEVTOOLS_RUN_AS_HOST_UID:-0}"
@@ -161,6 +173,13 @@ DOCKER_ARGS=(
   --tmpfs "$HOME_TMPFS_MOUNT"
 )
 
+# Validators are not PID 1 reapers. Keep the PID cap; reap orphaned fixtures.
+# Podman's /run/podman-init would conflict with our private /run tmpfs, so that
+# route is unchanged rather than claiming an unvalidated init mount works.
+if [ "$CONTAINER_BIN" = "docker" ]; then
+  DOCKER_ARGS+=(--init)
+fi
+
 if [ "$PRIVILEGED_POLICY" = "1" ]; then
   DOCKER_ARGS+=(--privileged)
 elif [ "$CAPABILITY_POLICY" = "CHOWN,FOWNER" ]; then
@@ -301,6 +320,11 @@ fi
 SOURCE_ROOT_CONTAINER="${WUNDER_DEVTOOLS_SOURCE_ROOT_CONTAINER:-/sources}"
 mounted_source_root=0
 if [ "$SOURCE_ROOT_POLICY" = enabled ] && [ -d "$SOURCE_ROOT_HOST" ]; then
+  source_root_real="$(cd "$SOURCE_ROOT_HOST" && pwd -P)" \
+    || fail_closed "cannot resolve source-root host path"
+  case "$source_root_real" in
+    *:*) fail_closed "resolved source-root host path contains an unsafe mount delimiter" ;;
+  esac
   case "$SOURCE_ROOT_CONTAINER" in
     /*) ;;
     *) fail_closed "source-root container path must be absolute" ;;
@@ -312,9 +336,15 @@ if [ "$SOURCE_ROOT_POLICY" = enabled ] && [ -d "$SOURCE_ROOT_HOST" ]; then
   esac
   shopt -s nullglob
   for collection_dir in "$SOURCE_ROOT_HOST"/ansible-collection-*; do
+    [ ! -L "$collection_dir" ] \
+      || fail_closed "collection source entry must not be a symbolic link"
     [ -d "$collection_dir" ] || continue
     collection_real="$(cd "$collection_dir" && pwd -P)"
     [ "$collection_real" = "$WORKSPACE_REAL" ] && continue
+    case "$collection_real" in
+      "$source_root_real"/*) ;;
+      *) fail_closed "resolved collection source path escapes the canonical source root" ;;
+    esac
     case "$collection_real" in
       *:*)
         fail_closed "resolved collection source path contains an unsafe mount delimiter"

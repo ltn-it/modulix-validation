@@ -115,7 +115,7 @@ jobs:
 
       - name: Upload Ubuntu evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ubuntu-host-parity-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ubuntu-host-parity.txt
@@ -171,9 +171,9 @@ jobs:
             done
             artifacts="${RUNNER_TEMP}/rhel9-incus"
             mkdir -p "${artifacts}"
-            curl -fsSL --retry 3 "${RHEL_9_INCUS_METADATA_URL}" \
+            curl -fsSL --retry 2 "${RHEL_9_INCUS_METADATA_URL}" \
               -o "${artifacts}/metadata.tar.xz"
-            curl -fsSL --retry 3 "${RHEL_9_INCUS_QCOW2_URL}" \
+            curl -fsSL --retry 2 "${RHEL_9_INCUS_QCOW2_URL}" \
               -o "${artifacts}/rootfs.qcow2"
             printf '%s  %s\n' "${RHEL_9_INCUS_METADATA_SHA256}" \
               "${artifacts}/metadata.tar.xz" | sha256sum -c -
@@ -235,7 +235,7 @@ jobs:
 
       - name: Upload RHEL evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: rhel-host-parity-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/rhel-host-parity.txt
