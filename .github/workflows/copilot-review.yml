@@ -1564,7 +1564,6 @@ jobs:
               page_unresolved="$(
                 jq \
                   --arg reviewer "${COPILOT_REVIEWER_LOGIN}" \
-                  --arg head_sha "${head_sha}" \
                   '[
                     .data.repository.pullRequest.reviewThreads.nodes[]
                     | select(.isResolved == false)
@@ -1573,7 +1572,6 @@ jobs:
                           .comments.nodes[];
                           ((.author.login // "") == $reviewer
                            or (.author.login // "") == ($reviewer + "[bot]"))
-                          and .pullRequestReview.commit.oid == $head_sha
                         )
                       )
                   ]
@@ -1864,10 +1862,12 @@ jobs:
                 *) return 1 ;;
               esac
             done
-            if jq -e --arg head "${EVENT_HEAD}" '
+            # An unresolved Copilot finding remains blocking across later pushes.
+            # GitHub resolves or dismisses the thread when it no longer applies;
+            # a different review commit alone is not resolution evidence.
+            if jq -e '
               any(.[]; .isResolved == false and any(.comments.nodes[];
-                (.author.login == "copilot-pull-request-reviewer" or .author.login == "copilot-pull-request-reviewer[bot]")
-                and .pullRequestReview.commit.oid == $head))
+                (.author.login == "copilot-pull-request-reviewer" or .author.login == "copilot-pull-request-reviewer[bot]")))
             ' <<<"${threads}" >/dev/null; then
               return 1
             else
