@@ -8,15 +8,15 @@ all:
   children:
     validation_runners:
       hosts:
-        ciwkr01.prd.dmz.corp.l-it.io:
+        ciwkr01.prd.edge.pub.l-it.io:
           ansible_connection: local
 
     incus_hosts:
       hosts:
-        ciwkr01.prd.dmz.corp.l-it.io:
+        ciwkr01.prd.edge.pub.l-it.io:
           ansible_connection: local
 
     aap_ci_runners:
       hosts:
-        ciwkr01.prd.dmz.corp.l-it.io:
+        ciwkr01.prd.edge.pub.l-it.io:
           ansible_connection: local

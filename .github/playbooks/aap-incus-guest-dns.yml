@@ -1,0 +1,38 @@
+---
+- name: Map the AAP CI Gateway hostname to the guest address
+  hosts: aaps
+  become: true
+  gather_facts: false
+  vars:
+    aap_ci_guest_fqdn: "{{ lookup('ansible.builtin.env', 'AAP_CI_GUEST_FQDN') }}"
+    aap_ci_guest_hostname: "{{ lookup('ansible.builtin.env', 'AAP_CI_GUEST_HOSTNAME') }}"
+
+  tasks:
+    - name: Validate the guest DNS inputs
+      ansible.builtin.assert:
+        that:
+          - aap_ci_guest_fqdn | length > 0
+          - aap_ci_guest_hostname | length > 0
+          - ansible_host | length > 0
+        quiet: true
+
+    - name: Map the Gateway FQDN to the guest network address
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        line: "{{ ansible_host }} {{ aap_ci_guest_fqdn }} {{ aap_ci_guest_hostname }}"
+        state: present
+
+    - name: Resolve the Gateway FQDN through the guest resolver
+      ansible.builtin.command:
+        argv:
+          - getent
+          - ahostsv4
+          - "{{ aap_ci_guest_fqdn }}"
+      register: aap_ci_guest_dns_lookup
+      changed_when: false
+
+    - name: Require the Gateway FQDN to resolve to the guest network address
+      ansible.builtin.assert:
+        that:
+          - (aap_ci_guest_dns_lookup.stdout_lines | first).split()[0] == ansible_host
+        quiet: true

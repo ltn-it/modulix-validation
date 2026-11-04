@@ -20,7 +20,7 @@ aap_ci_rhel_activation_keys:
 
 aap_ci_bundle_files:
   "2.6": /srv/aap/bundles/aap-2.6-containerized-setup-bundle.tar.gz
-  "2.7": /srv/aap/bundles/aap-2.7-containerized-setup-bundle.tar.gz
+  "2.7": ~/.cache/lit/aap/aap-2.7-containerized-setup-bundle.tar.gz
 
 aap_ci_test_matrix:
   - name: aap26-rhel9
@@ -62,7 +62,7 @@ aap_ci_test_matrix:
     incus_vm_root_size: 70GiB
     host_memory_headroom_mib: "4096"
     rhsm_activation_key: "ak-default-rhel-10"
-    aap_bundle_file: /srv/aap/bundles/aap-2.7-containerized-setup-bundle.tar.gz
+    aap_bundle_file: ~/.cache/lit/aap/aap-2.7-containerized-setup-bundle.tar.gz
 
   - name: aap27-rhel10
     enabled: true
@@ -75,4 +75,4 @@ aap_ci_test_matrix:
     incus_vm_root_size: 70GiB
     host_memory_headroom_mib: "4096"
     rhsm_activation_key: "ak-default-rhel-10"
-    aap_bundle_file: /srv/aap/bundles/aap-2.7-containerized-setup-bundle.tar.gz
+    aap_bundle_file: ~/.cache/lit/aap/aap-2.7-containerized-setup-bundle.tar.gz

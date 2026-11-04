@@ -226,12 +226,13 @@ Optional:
 
 - `RHSM_ORG_ID`: overrides the validation inventory RHSM org.
 - `AAP_CI_ADMIN_PASSWORD`: fixed test admin password.
-- `AAP_26_BUNDLE_URL` / `AAP_26_BUNDLE_SHA256`: AAP 2.6 bundle artifact.
 - `AAP_27_BUNDLE_URL` / `AAP_27_BUNDLE_SHA256`: AAP 2.7 bundle artifact.
 - `RHEL_9_INCUS_METADATA_URL` / `RHEL_9_INCUS_METADATA_SHA256`: RHEL 9 Incus metadata artifact.
 - `RHEL_9_INCUS_QCOW2_URL` / `RHEL_9_INCUS_QCOW2_SHA256`: RHEL 9 Incus qcow2 artifact.
 - `RHEL_10_INCUS_METADATA_URL` / `RHEL_10_INCUS_METADATA_SHA256`: RHEL 10 Incus metadata artifact.
 - `RHEL_10_INCUS_QCOW2_URL` / `RHEL_10_INCUS_QCOW2_SHA256`: RHEL 10 Incus qcow2 artifact.
+- `AAP_STAGE_SOURCE_URL` / `AAP_STAGE_S3_PUT_URL`: temporary secrets for the
+  manual, checksum-verified AAP 2.7 bundle staging job; remove after use.
 
 The checked-in AAP matrix still contains legacy RHSM organization and
 activation-key values. They require migration to approved secret references and

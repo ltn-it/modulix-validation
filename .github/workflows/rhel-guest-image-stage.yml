@@ -1,0 +1,176 @@
+---
+name: Stage RHEL guest image for AAP Incus CI
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: RHEL major release to stage
+        required: true
+        type: choice
+        options:
+          - "9"
+          - "10"
+      source:
+        description: Verified source location
+        required: true
+        type: choice
+        options:
+          - runner_cache
+          - redhat_url
+
+permissions:
+  contents: read
+
+jobs:
+  stage:
+    name: Verify, import, and archive RHEL ${{ inputs.release }} guest image
+    timeout-minutes: 120
+    runs-on:
+      - self-hosted
+      - linux
+      - x64
+      - incus
+      - nested-virt
+      - aap
+
+    steps:
+      - name: Mint bounded checkout token
+        id: source-app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ vars.RELEASE_AUTOMATION_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_AUTOMATION_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: |
+            modulix-automation
+            ansible-collection-rhel
+            ansible-collection-ubuntu
+          permission-contents: read
+
+      - name: Checkout pinned image runbook
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          repository: lightning-it/modulix-automation
+          ref: 5facb487f849ad64010b9b8b704b56a5b70d1a5d
+          path: modulix-automation
+          token: ${{ steps.source-app.outputs.token }}
+          persist-credentials: false
+
+      - name: Checkout pinned RHEL collection
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          repository: lightning-it/ansible-collection-rhel
+          ref: ec2a39f30355b6ff4ce9ec32b03d54c1e58baa3e
+          path: ansible-collection-rhel
+          token: ${{ steps.source-app.outputs.token }}
+          persist-credentials: false
+
+      - name: Checkout pinned Ubuntu collection
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          repository: lightning-it/ansible-collection-ubuntu
+          ref: ae948b86315b674446e8710e97ac0f3ed21ba59f
+          path: ansible-collection-ubuntu
+          token: ${{ steps.source-app.outputs.token }}
+          persist-credentials: false
+
+      - name: Download and verify Red Hat guest qcow2
+        env:
+          RHEL_STAGE_SOURCE_URL: ${{ secrets.RHEL_STAGE_SOURCE_URL }}
+          RHEL_RELEASE: ${{ inputs.release }}
+          RHEL_SOURCE: ${{ inputs.source }}
+        run: |
+          set -euo pipefail
+          case "${RHEL_RELEASE}" in
+            9) expected_bytes=1284374528; expected_sha=933a76c995f8866f186f1530c7d4be9d5684656dadda614b1d651705230dd41e ;;
+            10) expected_bytes=1049821184; expected_sha=07b63e34655baaa89b8f310367293a438444768da9bec45f27170b7f0a877ec4 ;;
+            *) echo 'Unsupported RHEL release' >&2; exit 1 ;;
+          esac
+          stage_dir="${RUNNER_TEMP}/rhel-guest-stage"
+          mkdir -p -- "${stage_dir}"
+          image_path="${stage_dir}/rhel-${RHEL_RELEASE}-guest.qcow2"
+          case "${RHEL_SOURCE}" in
+            runner_cache)
+              cp --sparse=always \
+                "${HOME}/.cache/lit/rhel-guest-images/${RHEL_RELEASE}/rhel${RHEL_RELEASE}-original.qcow2" \
+                "${image_path}"
+              ;;
+            redhat_url)
+              test -n "${RHEL_STAGE_SOURCE_URL}"
+              printf 'url = "%s"\n' "${RHEL_STAGE_SOURCE_URL}" |
+                curl --config - --fail --location --retry 3 --silent --show-error \
+                  --output "${image_path}"
+              ;;
+            *) echo 'Unsupported source' >&2; exit 1 ;;
+          esac
+          test "$(stat -c %s "${image_path}")" = "${expected_bytes}"
+          printf '%s  %s\n' "${expected_sha}" "${image_path}" | sha256sum --check --status
+          python3 - "${image_path}" <<'PY'
+          from pathlib import Path
+          import sys
+
+          with Path(sys.argv[1]).open('rb') as image:
+              if image.read(4) != b'QFI\xfb':
+                  raise SystemExit('Downloaded file is not a qcow2 image')
+          PY
+          sha256sum "${image_path}"
+
+      - name: Build and import Incus image using pinned Ansible roles
+        env:
+          RHEL_RELEASE: ${{ inputs.release }}
+        run: |
+          set -euo pipefail
+          ansible_core_version=2.18.14
+          venv_dir="${RUNNER_TEMP}/rhel-stage-ansible-${ansible_core_version}"
+          python3 -m venv "${venv_dir}"
+          "${venv_dir}/bin/python" -m pip install "ansible-core==${ansible_core_version}"
+          collections_dir="${RUNNER_TEMP}/rhel-stage-collections"
+          mkdir -p "${collections_dir}/ansible_collections/lit"
+          ln -sfn "${GITHUB_WORKSPACE}/ansible-collection-rhel" \
+            "${collections_dir}/ansible_collections/lit/rhel"
+          ln -sfn "${GITHUB_WORKSPACE}/ansible-collection-ubuntu" \
+            "${collections_dir}/ansible_collections/lit/ubuntu"
+          export ANSIBLE_COLLECTIONS_PATH="${collections_dir}"
+          image_path="${RUNNER_TEMP}/rhel-guest-stage/rhel-${RHEL_RELEASE}-guest.qcow2"
+          image_sha256="$(sha256sum "${image_path}" | cut -d ' ' -f 1)"
+          "${venv_dir}/bin/ansible-playbook" -i localhost, \
+            modulix-automation/ansible/runbooks/40-platforms/incus/25-rhel-guest-image.yml \
+            -e "rhel_guest_image_release=${RHEL_RELEASE}" \
+            -e "rhel_guest_image_source_path=${image_path}" \
+            -e "rhel_guest_image_source_sha256=${image_sha256}" \
+            -e "rhel_guest_image_alias=rhel${RHEL_RELEASE}-aap-ci"
+          incus --force-local image info "local:rhel${RHEL_RELEASE}-aap-ci" >/dev/null
+
+      - name: Archive verified Incus image in private object storage
+        env:
+          RHEL_RELEASE: ${{ inputs.release }}
+          RHEL_STAGE_QCOW2_PUT_URL: ${{ secrets.RHEL_STAGE_QCOW2_PUT_URL }}
+          RHEL_STAGE_METADATA_PUT_URL: ${{ secrets.RHEL_STAGE_METADATA_PUT_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RHEL_STAGE_QCOW2_PUT_URL}" ] &&
+            [ -z "${RHEL_STAGE_METADATA_PUT_URL}" ]; then
+            echo 'Private archive URLs are absent; verified image remains imported on this runner.'
+            exit 0
+          fi
+          test -n "${RHEL_STAGE_QCOW2_PUT_URL}"
+          test -n "${RHEL_STAGE_METADATA_PUT_URL}"
+          image_dir="${HOME}/.cache/lit/rhel-guest-images/${RHEL_RELEASE}"
+          image_path="${image_dir}/rhel${RHEL_RELEASE}-aap-ci.qcow2"
+          metadata_path="${image_dir}/metadata.tar.xz"
+          for artifact in qcow2 metadata; do
+            if [ "${artifact}" = qcow2 ]; then
+              file_path="${image_path}"
+              put_url="${RHEL_STAGE_QCOW2_PUT_URL}"
+            else
+              file_path="${metadata_path}"
+              put_url="${RHEL_STAGE_METADATA_PUT_URL}"
+            fi
+            sha256sum "${file_path}"
+            content_md5="$(openssl dgst -md5 -binary "${file_path}" | base64 -w 0)"
+            printf 'url = "%s"\n' "${put_url}" |
+              curl --config - --fail --silent --show-error --request PUT \
+                --header "Content-MD5: ${content_md5}" \
+                --upload-file "${file_path}"
+          done

@@ -35,7 +35,7 @@ Runner script:
 Validation matrix:
 
 ```text
-inventories/nightly/host_vars/ciwkr01.prd.dmz.corp.l-it.io/aap_ci_matrix.yml
+inventories/nightly/host_vars/ciwkr01.prd.edge.pub.l-it.io/aap_ci_matrix.yml
 ```
 
 The nightly schedule runs at `02:00 UTC` from the default branch. The workflow
@@ -71,12 +71,18 @@ Optional secrets:
   generates a per-run password.
 
 Artifact sync secrets are optional. When all of them are present, the workflow
-downloads/verifies the AAP bundles and RHEL Incus images before preflight. When
+downloads/verifies the active AAP 2.7 bundle and RHEL Incus images before preflight. When
 one or more are missing, the workflow expects the files and Incus aliases to
 already exist on the runner.
 
-- `AAP_26_BUNDLE_URL`
-- `AAP_26_BUNDLE_SHA256`
+For a one-time manual bundle stage, set `AAP_STAGE_SOURCE_URL` to a short-lived
+Red Hat download URL and `AAP_STAGE_S3_PUT_URL` to a short-lived, exact-key S3
+PUT URL. Dispatch this workflow with `stage_aap27_bundle=true`. That job checks
+the fixed AAP 2.7-11 SHA-256 before placing the bundle in the runner account's
+`~/.cache/lit/aap` directory
+and uploading it to private storage. It does not run the AAP matrix. Remove
+the temporary secrets after the job. The scheduled workflow does not use them.
+
 - `AAP_27_BUNDLE_URL`
 - `AAP_27_BUNDLE_SHA256`
 - `RHEL_9_INCUS_METADATA_URL`
@@ -96,20 +102,42 @@ The runner must match these labels:
 self-hosted, linux, x64, incus, nested-virt, aap
 ```
 
-On the runner, verify:
+On the bare metal runner `ciwkr01.prd.edge.pub.l-it.io`, verify:
 
 ```bash
 test -e /dev/kvm
 incus info >/dev/null
 incus image info local:rhel9-aap-ci >/dev/null
 incus image info local:rhel10-aap-ci >/dev/null
-test -f /srv/aap/bundles/aap-2.6-containerized-setup-bundle.tar.gz
-test -f /srv/aap/bundles/aap-2.7-containerized-setup-bundle.tar.gz
+test -f ~/.cache/lit/aap/aap-2.7-containerized-setup-bundle.tar.gz
 ```
 
 If object-storage secrets are configured, these files and aliases are managed by
 `modulix-automation/ansible/runbooks/40-platforms/incus/20-image-artifacts.yml`
 from the validation inventory.
+
+### Build and stage RHEL guest images
+
+Red Hat Image Builder can produce x86_64 Virtualization guest qcow2 images for
+RHEL 9 and 10. Choose **Register later** so the AAP test registers each new VM
+at boot. The separate `Stage RHEL guest image for AAP Incus CI` manual workflow
+uses the pinned `lit.rhel.cloud_image` and `lit.ubuntu.incus_image` roles to
+verify and import one release at a time. Select `redhat_url` and set the
+temporary `RHEL_STAGE_SOURCE_URL` secret for a new Image Builder download, or
+select `runner_cache` to reuse a previously verified original qcow2 retained
+on the runner. The workflow checks the exact size and SHA-256, enables SSH and
+Incus cloud-init in the output, and replaces the `local:rhel9-aap-ci` or
+`local:rhel10-aap-ci` image alias without privileged workflow access. The host
+playbook must first install `guestfs-tools` and grant the runner account read
+access to the installed kernels.
+
+To archive the result, also set exact-key, short-lived S3 PUT URLs in
+`RHEL_STAGE_QCOW2_PUT_URL` and `RHEL_STAGE_METADATA_PUT_URL`. The job uploads
+both verified artifacts to the private bucket using Content-MD5. With both PUT
+URLs absent, the import still succeeds and the objects remain pending archive.
+Remove all temporary URL secrets after staging and record the SHA-256 values
+shown in the job log. The builder's major-release selection does not prove a
+specific minor release; inspect the running guest before claiming one.
 
 ## Manual Run
 

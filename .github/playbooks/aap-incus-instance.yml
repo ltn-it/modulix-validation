@@ -10,6 +10,8 @@
     aap_ci_guest_hostname: "{{ lookup('ansible.builtin.env', 'AAP_CI_GUEST_HOSTNAME') }}"
     aap_ci_guest_fqdn: "{{ lookup('ansible.builtin.env', 'AAP_CI_GUEST_FQDN') }}"
     aap_ci_incus_image: "{{ lookup('ansible.builtin.env', 'INCUS_IMAGE') }}"
+    aap_ci_incus_network: "{{ lookup('ansible.builtin.env', 'AAP_CI_INCUS_NETWORK') | default('incusbr0', true) }}"
+    aap_ci_incus_network_ipv4: "{{ lookup('ansible.builtin.env', 'AAP_CI_INCUS_NETWORK_IPV4') | default('10.222.0.1/24', true) }}"
     aap_ci_vm_cpu: "{{ lookup('ansible.builtin.env', 'INCUS_VM_CPU') | default('4', true) }}"
     aap_ci_vm_memory: "{{ lookup('ansible.builtin.env', 'INCUS_VM_MEMORY') | default('20GiB', true) }}"
     aap_ci_vm_root_size: "{{ lookup('ansible.builtin.env', 'INCUS_VM_ROOT_SIZE') | default('70GiB', true) }}"
@@ -19,6 +21,11 @@
     aap_ci_run_attempt: "{{ lookup('ansible.builtin.env', 'GITHUB_RUN_ATTEMPT') | default('1', true) }}"
     aap_ci_matrix_name: "{{ lookup('ansible.builtin.env', 'MATRIX_NAME') }}"
     aap_ci_expires_at: "{{ lookup('ansible.builtin.env', 'AAP_CI_EXPIRES_AT') }}"
+    aap_ci_mac_suffix: "{{ (aap_ci_instance_name | hash('sha256'))[:10] }}"
+    aap_ci_instance_mac: >-
+      {{ '02:' ~ aap_ci_mac_suffix[0:2] ~ ':' ~ aap_ci_mac_suffix[2:4]
+         ~ ':' ~ aap_ci_mac_suffix[4:6] ~ ':' ~ aap_ci_mac_suffix[6:8]
+         ~ ':' ~ aap_ci_mac_suffix[8:10] }}
     aap_ci_incus_argv: >-
       {{
         ['incus', '--force-local']
@@ -38,9 +45,82 @@
               aap_ci_guest_hostname | length > 0
               and aap_ci_guest_fqdn | length > 0
               and aap_ci_incus_image | length > 0
+              and aap_ci_incus_network | length > 0
+              and aap_ci_incus_network_ipv4 | length > 0
               and aap_ci_ssh_public_key_file | length > 0
             )
         fail_msg: AAP Incus lifecycle inputs are incomplete or invalid.
+
+    - name: Discover managed Incus networks
+      ansible.builtin.command:
+        argv: "{{ aap_ci_incus_argv + ['network', 'list', '--format', 'json'] }}"
+      register: aap_ci_networks_before
+      changed_when: false
+      when: aap_ci_incus_action == 'create'
+
+    - name: Create the AAP CI bridge when absent
+      ansible.builtin.command:
+        argv: >-
+          {{
+            aap_ci_incus_argv
+            + [
+              'network', 'create', aap_ci_incus_network,
+              'dns.mode=managed',
+              'ipv4.address=' ~ aap_ci_incus_network_ipv4,
+              'ipv4.dhcp=true',
+              'ipv4.nat=true',
+              'ipv6.address=none'
+            ]
+          }}
+      changed_when: true
+      when:
+        - aap_ci_incus_action == 'create'
+        - >-
+          aap_ci_incus_network not in
+          (aap_ci_networks_before.stdout | from_json | map(attribute='name') | list)
+
+    - name: Inspect the AAP CI bridge
+      ansible.builtin.command:
+        argv: "{{ aap_ci_incus_argv + ['network', 'list', '--format', 'json'] }}"
+      register: aap_ci_networks_after
+      changed_when: false
+      when: aap_ci_incus_action == 'create'
+
+    - name: Select the AAP CI bridge
+      ansible.builtin.set_fact:
+        aap_ci_network_state: >-
+          {{
+            aap_ci_networks_after.stdout | from_json
+            | selectattr('name', 'equalto', aap_ci_incus_network)
+            | list | first | default({}, true)
+          }}
+      when: aap_ci_incus_action == 'create'
+
+    - name: Validate the AAP CI bridge configuration
+      ansible.builtin.assert:
+        that:
+          - aap_ci_network_state.type | default('') == 'bridge'
+          - (aap_ci_network_state.config | default({})).get('ipv4.address', '') == aap_ci_incus_network_ipv4
+          - (aap_ci_network_state.config | default({})).get('ipv4.dhcp', '') == 'true'
+          - (aap_ci_network_state.config | default({})).get('ipv4.nat', '') == 'true'
+          - (aap_ci_network_state.config | default({})).get('ipv6.address', '') == 'none'
+        fail_msg: The AAP CI bridge is missing or has unexpected settings.
+      when: aap_ci_incus_action == 'create'
+
+    - name: Check the cloud-init ISO builder
+      ansible.builtin.stat:
+        path: /usr/bin/mkisofs
+      register: aap_ci_mkisofs
+      when: aap_ci_incus_action == 'create'
+
+    - name: Require the cloud-init ISO builder
+      ansible.builtin.assert:
+        that:
+          - aap_ci_mkisofs.stat.exists
+        fail_msg: >-
+          Run the inventory-backed GitHub runner Incus host reconciliation
+          playbook to install genisoimage before starting AAP CI guests.
+      when: aap_ci_incus_action == 'create'
 
     - name: Create the stopped AAP validation VM
       ansible.builtin.include_role:
@@ -91,27 +171,23 @@
       changed_when: true
       when: aap_ci_incus_action == 'create'
 
-    - name: Read the AAP validation VM NIC MAC address
+    - name: Attach the managed Incus network before first boot
       ansible.builtin.command:
         argv: >-
           {{
             aap_ci_incus_argv
             + [
               'config',
-              'get',
+              'device',
+              'add',
               aap_ci_instance_name,
-              'volatile.eth0.hwaddr'
+              'eth0',
+              'nic',
+              'network=' ~ aap_ci_incus_network,
+              'hwaddr=' ~ aap_ci_instance_mac
             ]
           }}
-      register: aap_ci_instance_mac
-      changed_when: false
-      when: aap_ci_incus_action == 'create'
-
-    - name: Validate the AAP validation VM NIC MAC address
-      ansible.builtin.assert:
-        that:
-          - aap_ci_instance_mac.stdout | trim | length > 0
-        fail_msg: Incus did not expose volatile.eth0.hwaddr for the AAP VM.
+      changed_when: true
       when: aap_ci_incus_action == 'create'
 
     - name: Start the configured AAP validation VM
@@ -119,6 +195,7 @@
         name: lit.ubuntu.incus_instance
       vars:
         incus_instance_default_project: "{{ aap_ci_incus_project }}"
+        incus_instance_default_cloud_init_manage_etc_hosts: false
         incus_instance_inventory_path: ""
         incus_instance_items:
           - name: "{{ aap_ci_instance_name }}"
@@ -133,6 +210,9 @@
               - "{{ lookup('ansible.builtin.file', aap_ci_ssh_public_key_file) | trim }}"
             wait_for_ip: false
             wait_for_ssh: false
+            # The verified RHEL CI image already includes OpenSSH. Package
+            # installation before RHSM registration makes cloud-init fail.
+            cloud_init_packages: []
             limits:
               cpu: "{{ aap_ci_vm_cpu }}"
               memory: "{{ aap_ci_vm_memory }}"
@@ -141,7 +221,7 @@
               ethernets:
                 incus0:
                   match:
-                    macaddress: "{{ aap_ci_instance_mac.stdout | trim }}"
+                    macaddress: "{{ aap_ci_instance_mac }}"
                   dhcp4: true
                   dhcp6: true
                   accept-ra: true

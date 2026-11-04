@@ -259,145 +259,6 @@ run_with_heartbeat() {
   return "${rc}"
 }
 
-extract_ansible_json_field() {
-  local field="$1"
-
-  python3 -c '
-import json
-import sys
-
-field = sys.argv[1]
-raw = sys.stdin.read()
-if "=>" not in raw:
-    raise SystemExit("missing Ansible JSON payload")
-payload = raw.split("=>", 1)[1].strip()
-data = json.loads(payload)
-for part in field.split("."):
-    if not isinstance(data, dict):
-        data = None
-        break
-    data = data.get(part)
-if isinstance(data, bool):
-    print("true" if data else "false")
-elif data is None:
-    print("")
-else:
-    print(data)
-' "${field}"
-}
-
-poll_aap_installer() {
-  local jid_path="$1"
-  local timeout="${AAP_CI_INSTALLER_POLL_TIMEOUT_SECONDS:-14400}"
-  local interval="${AAP_CI_INSTALLER_POLL_INTERVAL_SECONDS:-60}"
-  local start_ts
-  local now_ts
-  local deadline_ts
-  local jid=""
-  local jid_output
-  local jid_rc
-  local poll_output
-  local poll_rc
-  local finished
-  local remote_rc
-
-  if ! [[ "${timeout}" =~ ^[0-9]+$ ]] || [ "${timeout}" -lt 1 ]; then
-    echo "ERROR: AAP_CI_INSTALLER_POLL_TIMEOUT_SECONDS must be a positive integer." >&2
-    return 2
-  fi
-
-  if ! [[ "${interval}" =~ ^[0-9]+$ ]] || [ "${interval}" -lt 1 ]; then
-    echo "ERROR: AAP_CI_INSTALLER_POLL_INTERVAL_SECONDS must be a positive integer." >&2
-    return 2
-  fi
-
-  start_ts="$(date +%s)"
-  deadline_ts=$((start_ts + timeout))
-
-  echo "Waiting for native AAP installer async job id at ${jid_path}."
-  while [ -z "${jid}" ]; do
-    now_ts="$(date +%s)"
-    if [ "${now_ts}" -ge "${deadline_ts}" ]; then
-      echo "ERROR: timed out waiting for native AAP installer async job id." >&2
-      return 124
-    fi
-
-    jid_output="$(
-      ansible \
-        -i "${inventory_path}" \
-        aaps \
-        -b \
-        -m ansible.builtin.shell \
-        -a "test -s '${jid_path}' && printf 'AAP_CI_INSTALLER_JID=' && cat '${jid_path}'" \
-        -o 2>&1
-    )"
-    jid_rc=$?
-    if [ "${jid_rc}" -eq 0 ]; then
-      jid="$(printf '%s\n' "${jid_output}" | sed -n 's/.*AAP_CI_INSTALLER_JID=//p' | tail -n 1 | tr -d '\r')"
-    fi
-
-    if [ -z "${jid}" ]; then
-      echo "AAP installer async job id is not available yet at $(date -u +%Y-%m-%dT%H:%M:%SZ)."
-      sleep "${interval}" || true
-    fi
-  done
-
-  echo "Polling native AAP installer async job ${jid}."
-  while true; do
-    now_ts="$(date +%s)"
-    if [ "${now_ts}" -ge "${deadline_ts}" ]; then
-      echo "ERROR: native AAP installer async job ${jid} did not finish within ${timeout} seconds." >&2
-      return 124
-    fi
-
-    poll_output="$(
-      ansible \
-        -i "${inventory_path}" \
-        aaps \
-        -b \
-        --become-user "${install_user}" \
-        -m ansible.builtin.async_status \
-        -a "jid=${jid}" \
-        -o 2>&1
-    )"
-    poll_rc=$?
-    finished="$(printf '%s' "${poll_output}" | extract_ansible_json_field finished 2>/dev/null || true)"
-    remote_rc="$(printf '%s' "${poll_output}" | extract_ansible_json_field rc 2>/dev/null || true)"
-
-    echo "AAP installer async status at $(date -u +%Y-%m-%dT%H:%M:%SZ): finished=${finished:-unknown} rc=${remote_rc:-pending}."
-
-    if [ "${finished}" = "true" ] || [ "${finished}" = "1" ]; then
-      if [ "${remote_rc:-0}" -ne 0 ]; then
-        echo "ERROR: native AAP installer async job ${jid} failed with rc=${remote_rc}." >&2
-        return "${remote_rc}"
-      fi
-
-      echo "Native AAP installer async job ${jid} finished successfully."
-      return 0
-    fi
-
-    if [ "${poll_rc}" -ne 0 ] && [ -z "${finished}" ]; then
-      echo "ERROR: unable to read native AAP installer async job status." >&2
-      printf '%s\n' "${poll_output}" >&2
-      return "${poll_rc}"
-    fi
-
-    sleep "${interval}" || true
-  done
-}
-
-clear_aap_installer_jid() {
-  local jid_path="$1"
-
-  ansible \
-    -i "${inventory_path}" \
-    aaps \
-    -b \
-    -m ansible.builtin.file \
-    -a "path=${jid_path} state=absent" \
-    >/dev/null 2>&1 || true
-}
-
 collect_failure_diagnostics() {
   local diagnostics_script="${work_dir:-/tmp}/aap-ci-diagnostics.sh"
   local log_lines="${AAP_CI_DIAGNOSTICS_LOG_LINES:-${AAP_CI_DIAGNOSTIC_LOG_LINES:-220}}"
@@ -961,6 +822,10 @@ wait_for_incus_guest_ready
 
 ansible-playbook \
   -i "${inventory_path}" \
+  "${validation_dir}/.github/playbooks/aap-incus-guest-dns.yml"
+
+ansible-playbook \
+  -i "${inventory_path}" \
   "${supplementary_dir}/playbooks/rhel_prepare.yml" \
   -e rhel_guest_target=aaps \
   -e '{"virtual_guest_manage_qemu_guest_agent": false}'
@@ -978,14 +843,12 @@ aap_deploy_install_user: $(yaml_single_quote "${install_user}")
 aap_deploy_install_user_home: $(yaml_single_quote "${install_user_home}")
 aap_deploy_topology: growth
 aap_deploy_setup_download_version: "$(printf '%s' "${AAP_VERSION}")"
-aap_deploy_gateway_main_url: "https://{{ ansible_host }}"
+aap_fqdn: $(yaml_single_quote "${guest_fqdn}")
 aap_deploy_validate_certs: false
 aap_prepare_bundle_src: "$(printf '%s' "${AAP_BUNDLE_FILE}")"
 aap_deploy_manage_download_unpack: true
 aap_deploy_run_installer: true
 aap_deploy_run_verify: true
-aap_deploy_installer_wait: false
-aap_deploy_installer_async_jid_path: /opt/aap/logs/aap_installer_async_jid
 aap_deploy_setup_install_extra_vars:
   hub_seed_collections: ${hub_seed_collections}
 virtual_guest_manage_qemu_guest_agent: false
@@ -997,82 +860,15 @@ ansible-playbook \
   "${automation_ansible_dir}/runbooks/50-applications/aap/06-base-os-prepare.yml" \
   -e @"${vars_path}"
 
-installer_async_jid_path="/opt/aap/logs/aap_installer_async_jid"
-deploy_rc=0
-installer_attempt=1
-installer_max_attempts="${AAP_CI_INSTALLER_MAX_ATTEMPTS:-2}"
-installer_retry_delay="${AAP_CI_INSTALLER_RETRY_DELAY_SECONDS:-300}"
-
-if ! [[ "${installer_max_attempts}" =~ ^[0-9]+$ ]] || [ "${installer_max_attempts}" -lt 1 ]; then
-  echo "ERROR: AAP_CI_INSTALLER_MAX_ATTEMPTS must be a positive integer." >&2
-  exit 2
-fi
-
-if ! [[ "${installer_retry_delay}" =~ ^[0-9]+$ ]]; then
-  echo "ERROR: AAP_CI_INSTALLER_RETRY_DELAY_SECONDS must be a non-negative integer." >&2
-  exit 2
-fi
-
 set +e
-
-while [ "${installer_attempt}" -le "${installer_max_attempts}" ]; do
-  echo "Starting native AAP installer attempt ${installer_attempt}/${installer_max_attempts}."
-  clear_aap_installer_jid "${installer_async_jid_path}"
-
-  if [ "${installer_attempt}" -eq 1 ]; then
-    run_with_heartbeat \
-      "AAP deploy start playbook" \
-      ansible-playbook \
-        -i "${inventory_path}" \
-        "${automation_ansible_dir}/runbooks/50-applications/aap/10-deploy.yml" \
-        -e @"${vars_path}" \
-        --tags aap_deploy
-  else
-    run_with_heartbeat \
-      "AAP deploy retry playbook" \
-      ansible-playbook \
-        -i "${inventory_path}" \
-        "${automation_ansible_dir}/runbooks/50-applications/aap/10-deploy.yml" \
-        -e @"${vars_path}" \
-        -e '{"aap_deploy_skip_if_runtime_active": false, "aap_deploy_reset_partial_install_enabled": true}' \
-        --tags aap_deploy
-  fi
-  deploy_rc=$?
-
-  if [ "${deploy_rc}" -ne 0 ]; then
-    break
-  fi
-
-  poll_aap_installer "${installer_async_jid_path}"
-  deploy_rc=$?
-
-  if [ "${deploy_rc}" -eq 0 ]; then
-    break
-  fi
-
-  if [ "${installer_attempt}" -lt "${installer_max_attempts}" ]; then
-    echo "Native AAP installer attempt ${installer_attempt} failed with rc=${deploy_rc}; retrying after ${installer_retry_delay} seconds."
-    sleep "${installer_retry_delay}" || true
-  fi
-
-  installer_attempt=$((installer_attempt + 1))
-done
-
-if [ "${deploy_rc}" -ne 0 ]; then
-  echo "Native AAP installer did not finish successfully after ${installer_attempt}/${installer_max_attempts} attempt(s)."
-fi
-
-if [ "${deploy_rc}" -eq 0 ]; then
-  run_with_heartbeat \
-    "AAP deployment verification playbook" \
-    ansible-playbook \
-      -i "${inventory_path}" \
-      "${automation_ansible_dir}/runbooks/50-applications/aap/10-deploy.yml" \
-      -e @"${vars_path}" \
-      -e '{"aap_deploy_installer_wait": true, "aap_deploy_run_installer": false, "aap_deploy_manage_download_unpack": false}' \
-      --tags aap_deploy
-  deploy_rc=$?
-fi
+run_with_heartbeat \
+  "AAP deploy and verification playbook" \
+  ansible-playbook \
+    -i "${inventory_path}" \
+    "${automation_ansible_dir}/runbooks/50-applications/aap/10-deploy.yml" \
+    -e @"${vars_path}" \
+    --tags aap_deploy
+deploy_rc=$?
 
 cleanup "${deploy_rc}"
 cleanup_rc=$?

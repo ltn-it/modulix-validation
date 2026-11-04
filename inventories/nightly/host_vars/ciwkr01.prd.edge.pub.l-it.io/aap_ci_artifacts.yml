@@ -1,12 +1,5 @@
 ---
 artifacts_items:
-  - name: aap-2.6-containerized-bundle
-    source: url
-    url: "{{ lookup('ansible.builtin.env', 'AAP_26_BUNDLE_URL') }}"
-    dest: /srv/aap/bundles/aap-2.6-containerized-setup-bundle.tar.gz
-    checksum: "sha256:{{ lookup('ansible.builtin.env', 'AAP_26_BUNDLE_SHA256') }}"
-    no_log: true
-
   - name: aap-2.7-containerized-bundle
     source: url
     url: "{{ lookup('ansible.builtin.env', 'AAP_27_BUNDLE_URL') }}"

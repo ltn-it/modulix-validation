@@ -132,8 +132,10 @@ nightly.lab.l-it.io
 
 Do not introduce `nightly.l-it.io` as another peer domain. `nightly` is a
 validation namespace below the existing lab boundary, not a stage or exposure
-boundary. The stable runner and control-plane hostname remains in its real
-`corp.l-it.io` stage and zone.
+boundary. Keep each runner and control-plane hostname in its actual inventory
+stage and zone. The AAP Incus runner migrated from
+`ciwkr01.prd.dmz.corp.l-it.io` to `ciwkr01.prd.edge.pub.l-it.io`; the protected
+GitHub runner labels still gate the suite.
 
 Use run-unique names such as:
 
@@ -228,7 +230,7 @@ output as diagnostics or workflow artifacts.
 The AAP Incus nightly workflow owns its matrix in:
 
 ```text
-inventories/nightly/host_vars/ciwkr01.prd.dmz.corp.l-it.io/aap_ci_matrix.yml
+inventories/nightly/host_vars/ciwkr01.prd.edge.pub.l-it.io/aap_ci_matrix.yml
 ```
 
 The workflow must:

@@ -15,6 +15,11 @@ on:
         required: true
         default: true
         type: boolean
+      stage_aap27_bundle:
+        description: "Verify and stage the AAP 2.7 bundle on this runner and in private S3"
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -24,8 +29,62 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  stage-aap27-bundle:
+    name: Stage verified AAP 2.7 bundle
+    if: github.event_name == 'workflow_dispatch' && inputs.stage_aap27_bundle
+    timeout-minutes: 180
+    runs-on:
+      - self-hosted
+      - linux
+      - x64
+      - incus
+      - nested-virt
+      - aap
+    steps:
+      - name: Download, verify, and stage bundle
+        env:
+          AAP_STAGE_SOURCE_URL: ${{ secrets.AAP_STAGE_SOURCE_URL }}
+          AAP_STAGE_S3_PUT_URL: ${{ secrets.AAP_STAGE_S3_PUT_URL }}
+        run: |
+          set -euo pipefail
+          test -n "${AAP_STAGE_SOURCE_URL}"
+          test -n "${AAP_STAGE_S3_PUT_URL}"
+          expected_sha256=7e3e330ce415269f391ad1cc9bf4493400a00ef8e8268fbc21a17ed2454db600
+          stage_dir="$(mktemp -d "${RUNNER_TEMP}/aap27-stage.XXXXXX")"
+          # All names are confined to the new per-run directory.
+          trap 'rm -f -- "${stage_dir}"/part-* "${stage_dir}/bundle.tar.gz"; rmdir "${stage_dir}"' EXIT
+          expected_bytes=4430534650
+          part_bytes=$(((expected_bytes + 7) / 8))
+          pids=()
+          for part in {0..7}; do
+            start=$((part * part_bytes))
+            end=$((start + part_bytes - 1))
+            if ((end >= expected_bytes)); then end=$((expected_bytes - 1)); fi
+            (
+              printf 'url = "%s"\n' "${AAP_STAGE_SOURCE_URL}" |
+                curl --config - --fail --location --retry 3 --silent --show-error \
+                  --range "${start}-${end}" --output "${stage_dir}/part-${part}"
+            ) &
+            pids+=("$!")
+          done
+          for pid in "${pids[@]}"; do wait "${pid}"; done
+          cat "${stage_dir}"/part-{0,1,2,3,4,5,6,7} > "${stage_dir}/bundle.tar.gz"
+          test "$(stat -c %s "${stage_dir}/bundle.tar.gz")" = "${expected_bytes}"
+          printf '%s  %s\n' "${expected_sha256}" "${stage_dir}/bundle.tar.gz" |
+            sha256sum -c -
+          bundle_path="${HOME}/.cache/lit/aap/aap-2.7-containerized-setup-bundle.tar.gz"
+          mkdir -p -- "$(dirname "${bundle_path}")"
+          install -m 0644 "${stage_dir}/bundle.tar.gz" "${bundle_path}"
+          content_md5="$(openssl dgst -md5 -binary "${stage_dir}/bundle.tar.gz" | base64 -w 0)"
+          printf 'url = "%s"\n' "${AAP_STAGE_S3_PUT_URL}" |
+            curl --config - --fail --silent --show-error --request PUT \
+              --header "Content-MD5: ${content_md5}" \
+              --upload-file "${stage_dir}/bundle.tar.gz"
+          test -r "${bundle_path}"
+
   prepare-matrix:
     name: Prepare AAP matrix
+    if: github.event_name != 'workflow_dispatch' || !inputs.stage_aap27_bundle
     timeout-minutes: 15
     runs-on:
       - self-hosted
@@ -64,6 +123,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           repository: lightning-it/modulix-automation
+          ref: dff1db7ef8e463cce1a19f3f0dce27f35923cef0
           path: modulix-automation
           token: ${{ steps.source-app.outputs.token }}
           persist-credentials: false
@@ -72,6 +132,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           repository: lightning-it/ansible-collection-supplementary
+          ref: 3465321ee64c36d58fb86d6c05c1d058d8eaf650
           path: ansible-collection-supplementary
           token: ${{ steps.source-app.outputs.token }}
           persist-credentials: false
@@ -80,6 +141,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           repository: lightning-it/ansible-collection-ubuntu
+          ref: 64a0bf8de05fbaf27b25c362fc4ae285dc917c43
           path: ansible-collection-ubuntu
           token: ${{ steps.source-app.outputs.token }}
           persist-credentials: false
@@ -119,7 +181,7 @@ jobs:
 
           matrix_file = Path(
               "modulix-validation/inventories/nightly/host_vars/"
-              "ciwkr01.prd.dmz.corp.l-it.io/aap_ci_matrix.yml"
+              "ciwkr01.prd.edge.pub.l-it.io/aap_ci_matrix.yml"
           )
           data = yaml.safe_load(matrix_file.read_text(encoding="utf-8"))
           default_project = data.get("aap_ci_incus_project", "default")
@@ -127,6 +189,7 @@ jobs:
               {
                   **entry,
                   "incus_project": entry.get("incus_project", default_project),
+                  "aap_bundle_file": os.path.expanduser(entry["aap_bundle_file"]),
               }
               for entry in data["aap_ci_test_matrix"]
               if entry.get("enabled", True)
@@ -152,7 +215,7 @@ jobs:
 
           matrix_file = Path(
               "modulix-validation/inventories/nightly/host_vars/"
-              "ciwkr01.prd.dmz.corp.l-it.io/aap_ci_matrix.yml"
+              "ciwkr01.prd.edge.pub.l-it.io/aap_ci_matrix.yml"
           )
           data = yaml.safe_load(matrix_file.read_text(encoding="utf-8"))
           print(data["aap_ci_rhsm_org"])
@@ -167,8 +230,6 @@ jobs:
 
       - name: Sync runner artifacts from object storage
         env:
-          AAP_26_BUNDLE_URL: ${{ secrets.AAP_26_BUNDLE_URL }}
-          AAP_26_BUNDLE_SHA256: ${{ secrets.AAP_26_BUNDLE_SHA256 }}
           AAP_27_BUNDLE_URL: ${{ secrets.AAP_27_BUNDLE_URL }}
           AAP_27_BUNDLE_SHA256: ${{ secrets.AAP_27_BUNDLE_SHA256 }}
           RHEL_9_INCUS_METADATA_URL: ${{ secrets.RHEL_9_INCUS_METADATA_URL }}
@@ -183,8 +244,6 @@ jobs:
           set -euo pipefail
 
           required_vars=(
-            AAP_26_BUNDLE_URL
-            AAP_26_BUNDLE_SHA256
             AAP_27_BUNDLE_URL
             AAP_27_BUNDLE_SHA256
             RHEL_9_INCUS_METADATA_URL
@@ -251,7 +310,7 @@ jobs:
 
           matrix_file = Path(
               "modulix-validation/inventories/nightly/host_vars/"
-              "ciwkr01.prd.dmz.corp.l-it.io/aap_ci_matrix.yml"
+              "ciwkr01.prd.edge.pub.l-it.io/aap_ci_matrix.yml"
           )
           data = yaml.safe_load(matrix_file.read_text(encoding="utf-8"))
           default_project = data.get("aap_ci_incus_project", "default")
@@ -273,7 +332,7 @@ jobs:
                           entry["name"],
                           entry.get("incus_project", default_project),
                           entry["incus_image"],
-                          entry["aap_bundle_file"],
+                          os.path.expanduser(entry["aap_bundle_file"]),
                       ]
                   )
               )
@@ -329,6 +388,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           repository: lightning-it/modulix-automation
+          ref: dff1db7ef8e463cce1a19f3f0dce27f35923cef0
           path: modulix-automation
           token: ${{ steps.source-app.outputs.token }}
           persist-credentials: false
@@ -353,6 +413,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           repository: lightning-it/ansible-collection-supplementary
+          ref: 3465321ee64c36d58fb86d6c05c1d058d8eaf650
           path: ansible-collection-supplementary
           token: ${{ steps.source-app.outputs.token }}
           persist-credentials: false
@@ -361,6 +422,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           repository: lightning-it/ansible-collection-ubuntu
+          ref: 64a0bf8de05fbaf27b25c362fc4ae285dc917c43
           path: ansible-collection-ubuntu
           token: ${{ steps.source-app.outputs.token }}
           persist-credentials: false
