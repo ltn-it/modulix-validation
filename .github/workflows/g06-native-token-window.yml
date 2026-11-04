@@ -1,0 +1,173 @@
+---
+name: G06 native token window diagnostic
+
+on:
+  pull_request:
+    types: [opened]
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
+jobs:
+  observe:
+    if: >-
+      github.event.pull_request.draft == true &&
+      github.event.pull_request.head.repo.id == github.event.repository.id &&
+      github.event.pull_request.user.id == 76040632 &&
+      github.event.pull_request.base.ref == 'develop' &&
+      github.event.pull_request.head.ref == 'diagnostic/g06-native-token-window-20261104' &&
+      github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Observe fixed read-only token rate window
+        env:
+          PROBE_TOKEN: ${{ github.token }}
+          PROBE_REPOSITORY: ${{ github.repository }}
+          PROBE_REPOSITORY_ID: ${{ github.repository_id }}
+          PROBE_RUN_ID: ${{ github.run_id }}
+          PROBE_RUN_ATTEMPT: ${{ github.run_attempt }}
+          PROBE_WORKFLOW_REF: ${{ github.workflow_ref }}
+          PROBE_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          PROBE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          python3 -I -B - <<'PY'
+          import json
+          import os
+          import re
+          import ssl
+          import sys
+          import urllib.error
+          import urllib.request
+
+          REPOSITORY = "ltn-it/modulix-validation"
+          REPOSITORY_ID = 1269461997
+          BRANCH = "diagnostic/g06-native-token-window-20261104"
+          HEADER_NAMES = (
+              "Date", "X-GitHub-Request-Id", "X-RateLimit-Limit",
+              "X-RateLimit-Remaining", "X-RateLimit-Used",
+              "X-RateLimit-Reset", "X-RateLimit-Resource",
+          )
+
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  return None
+
+          class ProbeError(Exception):
+              pass
+
+          def require(condition):
+              if not condition:
+                  raise ProbeError()
+
+          def emit(value):
+              print(json.dumps(value, sort_keys=True), flush=True)
+
+          def headers_only(response):
+              return {
+                  "status": response.status,
+                  "headers": {
+                      name.lower(): response.headers[name]
+                      for name in HEADER_NAMES if name in response.headers
+                  },
+              }
+
+          def rate_object(value, keys):
+              require(isinstance(value, dict) and all(key in value for key in keys))
+              result = {key: value[key] for key in keys}
+              for key, item in result.items():
+                  require((key == "resetAt" and isinstance(item, str)
+                           and re.fullmatch(r"[0-9T:Z.+-]{10,40}", item))
+                          or (key != "resetAt" and type(item) is int and item >= 0))
+              return result
+
+          def main():
+              require(os.environ["PROBE_REPOSITORY"] == REPOSITORY)
+              require(int(os.environ["PROBE_REPOSITORY_ID"]) == REPOSITORY_ID)
+              run_id = int(os.environ["PROBE_RUN_ID"])
+              attempt = int(os.environ["PROBE_RUN_ATTEMPT"])
+              require(run_id > 0 and attempt == 1)
+              workflow_ref = os.environ["PROBE_WORKFLOW_REF"]
+              workflow_sha = os.environ["PROBE_WORKFLOW_SHA"]
+              head_sha = os.environ["PROBE_HEAD_SHA"]
+              require(re.fullmatch(r"[0-9a-f]{40}", workflow_sha) is not None)
+              require(re.fullmatch(r"[0-9a-f]{40}", head_sha) is not None)
+              require(re.fullmatch(
+                  re.escape(REPOSITORY)
+                  + r"/\.github/workflows/g06-native-token-window\.yml@refs/pull/[1-9][0-9]*/merge",
+                  workflow_ref,
+              ) is not None)
+              token = os.environ.pop("PROBE_TOKEN")
+              require(bool(token))
+              opener = urllib.request.build_opener(
+                  urllib.request.ProxyHandler({}), NoRedirect(),
+                  urllib.request.HTTPSHandler(context=ssl.create_default_context()),
+              )
+
+              def request(path, payload=None):
+                  # Every caller below uses a fixed literal path or checked integer ID.
+                  require(path.startswith("/") and not path.startswith("//"))
+                  data = None if payload is None else json.dumps(payload).encode("ascii")
+                  req = urllib.request.Request(
+                      "https://api.github.com" + path, data=data,
+                      method="GET" if payload is None else "POST",
+                      headers={
+                          "Authorization": "Bearer " + token,
+                          "Accept": "application/vnd.github+json",
+                          "X-GitHub-Api-Version": "2022-11-28",
+                          "User-Agent": "g06-native-token-window",
+                          "Content-Type": "application/json",
+                      },
+                  )
+                  try:
+                      with opener.open(req, timeout=20) as response:
+                          emit(headers_only(response))
+                          raw = response.read(1024 * 1024 + 1)
+                          require(len(raw) <= 1024 * 1024)
+                          return json.loads(raw)
+                  except urllib.error.HTTPError as error:
+                      emit(headers_only(error))
+                      # Never read or print the error body, URL or credential.
+                      raise ProbeError() from None
+
+              repository = request("/repos/ltn-it/modulix-validation")
+              require(repository.get("id") == REPOSITORY_ID
+                      and repository.get("full_name") == REPOSITORY)
+              pull = request("/repos/ltn-it/modulix-validation/pulls/447")
+              require(pull.get("number") == 447
+                      and pull.get("base", {}).get("repo", {}).get("id") == REPOSITORY_ID)
+              run = request("/repos/ltn-it/modulix-validation/actions/runs/" + str(run_id))
+              require(run.get("id") == run_id and run.get("run_attempt") == attempt
+                      and run.get("repository", {}).get("id") == REPOSITORY_ID
+                      and run.get("repository", {}).get("full_name") == REPOSITORY
+                      and run.get("event") == "pull_request"
+                      and run.get("head_branch") == BRANCH
+                      and run.get("head_sha") == head_sha
+                      and run.get("path") == ".github/workflows/g06-native-token-window.yml")
+              emit({"repository_id": REPOSITORY_ID, "run_id": run_id,
+                    "run_attempt": attempt, "workflow_ref": workflow_ref,
+                    "workflow_sha": workflow_sha, "head_sha": head_sha})
+              rates = request("/rate_limit")
+              resources = rates.get("resources", {})
+              emit({"rates": {
+                  name: rate_object(resources.get(name), ("limit", "remaining", "used", "reset"))
+                  for name in ("core", "graphql")
+              }})
+              graphql = request("/graphql", {
+                  "query": "query { rateLimit { limit remaining used resetAt cost } }",
+              })
+              require(not graphql.get("errors"))
+              emit({"graphql_rate": rate_object(
+                  graphql.get("data", {}).get("rateLimit"),
+                  ("limit", "remaining", "used", "resetAt", "cost"),
+              )})
+
+          try:
+              main()
+          except Exception as error:
+              emit({"error_class": type(error).__name__})
+              sys.exit(1)
+          PY
