@@ -58,6 +58,10 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
         self.assertNotIn("secrets.", json.dumps(isolated))
         self.assertEqual(self.workflow["permissions"], {"contents": "read"})
 
+    def test_validation_caller_cannot_bypass_group_admission_through_legacy_mode(self):
+        self.assertNotEqual(self.invoke(ISOLATED_WORKER="false"), 0)
+        self.assertNotEqual(self.invoke(ISOLATED_WORKER="false", CALLER_EVENT="pull_request"), 0)
+
     def test_existing_legacy_caller_does_not_acquire_isolated_authority(self):
         self.assertEqual(self.invoke(ISOLATED_WORKER="false", CALLER_REPOSITORY="ltn-it/fixture",
                                      CALLER_REPOSITORY_ID="42", CALLER_REF="refs/heads/develop"), 0)

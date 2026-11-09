@@ -81,6 +81,10 @@ jobs:
           CALLER_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
+          if [[ "$CALLER_REPOSITORY" == ltn-it/modulix-validation && "$ISOLATED_WORKER" != true ]]; then
+            echo "Validation callers must use the isolated worker admission path" >&2
+            exit 1
+          fi
           if [[ "$ISOLATED_WORKER" == true ]]; then
             test "$CALLER_REPOSITORY" = ltn-it/modulix-validation
             test "$CALLER_REPOSITORY_ID" = 1269461997

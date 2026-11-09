@@ -231,7 +231,9 @@ cleanup after runner loss.
 ## Isolated Heavy worker routing candidate
 
 The reusable `collection-quality-profile.yml` accepts an explicit boolean
-`isolated-worker`, defaulting to false for existing callers. Its isolated path
+`isolated-worker`, defaulting to false for existing collection callers. Validation
+itself must use the isolated path: it cannot schedule a worker through the
+legacy branch of this same allowed reusable workflow. Its isolated path
 admits only the existing Validation repository identity and Main candidate
 receiver, the native release App actor, its original triggering actor,
 `workflow_dispatch`, and attempt one. Pull requests, fork repositories, other
