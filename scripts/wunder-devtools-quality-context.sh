@@ -129,13 +129,25 @@ engine_home=$(mktemp -d "$RUNNER_TEMP/quality-engine.XXXXXXXX")
 trap 'rm -rf -- "$engine_home"' EXIT
 engine_env=(env -i "PATH=$PATH" "HOME=$engine_home")
 [[ -z ${DOCKER_HOST:-} ]] || engine_env+=("DOCKER_HOST=$DOCKER_HOST")
+container_uid=$uid container_gid=$gid
+runtime_tmpfs="/tmp/wunder:rw,exec,nosuid,nodev,size=1g,mode=1777,uid=$uid,gid=$gid"
 if [[ ${WUNDER_CONTAINER_ENGINE:-docker} == podman ]]; then
   rootless=$("${engine_env[@]}" "$engine" info --format '{{.Host.Security.Rootless}}') || fail "Podman identity unavailable"
-  [[ $rootless == false ]] || fail "protected-incus-v1 does not admit rootless Podman"
+  case "$rootless" in
+    false) ;;
+    true)
+      # Rootless namespace UID 0 maps to this nonroot host user. Keep the
+      # host identity for custody/output checks and report the effective IDs
+      # separately to the driver. No keep-id rewrite or socket mount is needed.
+      container_uid=0 container_gid=0
+      runtime_tmpfs='/tmp/wunder:rw,exec,nosuid,nodev,size=1g,mode=1777'
+      ;;
+    *) fail "Podman rootless identity must be true or false" ;;
+  esac
 fi
-base=(run --rm --read-only --cap-drop ALL --security-opt no-new-privileges=true --pids-limit 512 --user "$uid:$gid"
+base=(run --rm --read-only --cap-drop ALL --security-opt no-new-privileges=true --pids-limit 512 --user "$container_uid:$container_gid"
   --tmpfs '/tmp:rw,noexec,nosuid,nodev,size=256m,mode=1777'
-  --tmpfs "/tmp/wunder:rw,exec,nosuid,nodev,size=1g,mode=1777,uid=$uid,gid=$gid"
+  --tmpfs "$runtime_tmpfs"
   --env HOME=/tmp/wunder --env TMPDIR=/tmp/wunder --mount "type=bind,source=$context,destination=/incus,readonly")
 [[ ${WUNDER_CONTAINER_ENGINE:-docker} != podman ]] || base+=(--read-only-tmpfs=false)
 identity_env=()
@@ -240,7 +252,7 @@ safe_path "$cell"
 owned_file "$cell/ownership.json"
 [[ $(stat -c %a -- "$cell/ownership.json") == 600 ]] || fail "private ownership mode required"
 runtime_env=(--env QUALITY_CONTEXT_PHASE=runtime --env "QUALITY_DEVTOOLS_IMAGE=$image"
-  --env "QUALITY_HOST_UID=$uid" --env "QUALITY_EFFECTIVE_UID=$uid" --env "QUALITY_EFFECTIVE_GID=$gid"
+  --env "QUALITY_HOST_UID=$uid" --env "QUALITY_EFFECTIVE_UID=$container_uid" --env "QUALITY_EFFECTIVE_GID=$container_gid"
   --env INCUS_CONF=/incus --env RUNNER_TEMP=/quality/tmp --env GITHUB_WORKSPACE=/workspace
   --env GIT_CONFIG_COUNT=1 --env GIT_CONFIG_KEY_0=safe.directory --env GIT_CONFIG_VALUE_0=/workspace)
 for key in "${input_names[@]/#/QUALITY_INPUT_}" GITHUB_REPOSITORY GITHUB_REPOSITORY_ID GITHUB_RUN_ID GITHUB_RUN_ATTEMPT GITHUB_JOB GITHUB_SHA GITHUB_WORKFLOW; do
