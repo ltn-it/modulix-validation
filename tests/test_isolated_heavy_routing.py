@@ -7,7 +7,7 @@ import unittest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-WORKFLOW = ROOT / ".github/workflows/collection-quality-profile.yml"
+WORKFLOW = ROOT / ".github/workflows/collection-quality-profile-isolated.yml"
 
 
 class IsolatedHeavyRoutingTests(unittest.TestCase):
@@ -47,24 +47,29 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
 
     def test_fixed_group_cannot_be_replaced_by_matrix_runner_or_environment(self):
         jobs = self.workflow["jobs"]
-        isolated = jobs["isolated-profile-cells"]
+        isolated = jobs["profile-cells"]
         self.assertEqual(isolated["runs-on"], {"group": "lit-pis-prd-isolated",
                          "labels": ["self-hosted", "linux", "x64", "lit-pis", "prd", "isolated"]})
         self.assertEqual(isolated["strategy"]["max-parallel"], 1)
         self.assertEqual(isolated["environment"]["name"], "heavy-isolated-pilot")
-        self.assertEqual(jobs["profile-cells"]["if"], "${{ !inputs['isolated-worker'] }}")
-        self.assertEqual(isolated["if"], "${{ inputs['isolated-worker'] }}")
+        self.assertEqual(set(jobs), {"validate-inputs", "profile-cells"})
+        self.assertNotIn("if", isolated)
         self.assertEqual(isolated["needs"], "validate-inputs")
         self.assertNotIn("secrets.", json.dumps(isolated))
         self.assertEqual(self.workflow["permissions"], {"contents": "read"})
 
     def test_validation_caller_cannot_bypass_group_admission_through_legacy_mode(self):
-        self.assertNotEqual(self.invoke(ISOLATED_WORKER="false"), 0)
+        self.assertNotEqual(self.invoke(ISOLATED_WORKER="false", CALLER_REPOSITORY="ltn-it/fixture"), 0)
         self.assertNotEqual(self.invoke(ISOLATED_WORKER="false", CALLER_EVENT="pull_request"), 0)
 
     def test_existing_legacy_caller_does_not_acquire_isolated_authority(self):
-        self.assertEqual(self.invoke(ISOLATED_WORKER="false", CALLER_REPOSITORY="ltn-it/fixture",
-                                     CALLER_REPOSITORY_ID="42", CALLER_REF="refs/heads/develop"), 0)
+        legacy = yaml.safe_load((ROOT / ".github/workflows/collection-quality-profile.yml").read_text())
+        self.assertNotIn("lit-pis-prd-isolated", json.dumps(legacy))
+        self.assertNotIn("if", legacy["jobs"]["profile-cells"])
+        contract = legacy["jobs"]["validate-inputs"]["steps"][0]["run"]
+        environment = {**self.environment, "CALLER_REPOSITORY": "ltn-it/fixture"}
+        result = subprocess.run(["bash", "-c", contract], env=environment, timeout=10)
+        self.assertEqual(result.returncode, 0)
 
 
 if __name__ == "__main__":

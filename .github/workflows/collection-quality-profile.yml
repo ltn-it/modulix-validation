@@ -30,11 +30,6 @@ on:
         description: Protected GitHub Environment containing runtime policy and secrets.
         required: true
         type: string
-      isolated-worker:
-        description: Use the restricted disposable-worker group for the Validation Main receiver.
-        required: false
-        default: false
-        type: boolean
       cpu-limit:
         description: Per-cell Incus CPU limit.
         required: false
@@ -70,33 +65,8 @@ jobs:
           CALLER_REPOSITORY: ${{ github.repository }}
           SOURCE_REPOSITORY: ${{ inputs['source-repository'] || github.repository }}
           SOURCE_SHA: ${{ inputs['source-sha'] }}
-          ISOLATED_WORKER: ${{ inputs['isolated-worker'] }}
-          CALLER_REPOSITORY_ID: ${{ github.repository_id }}
-          CALLER_EVENT: ${{ github.event_name }}
-          CALLER_REF: ${{ github.ref }}
-          CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
-          CALLER_ACTOR: ${{ github.actor }}
-          CALLER_ACTOR_ID: ${{ github.actor_id }}
-          CALLER_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-          CALLER_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          if [[ "$CALLER_REPOSITORY" == ltn-it/modulix-validation && "$ISOLATED_WORKER" != true ]]; then
-            echo "Validation callers must use the isolated worker admission path" >&2
-            exit 1
-          fi
-          if [[ "$ISOLATED_WORKER" == true ]]; then
-            test "$CALLER_REPOSITORY" = ltn-it/modulix-validation
-            test "$CALLER_REPOSITORY_ID" = 1269461997
-            test "$CALLER_EVENT" = workflow_dispatch
-            test "$CALLER_REF" = refs/heads/main
-            test "$CALLER_WORKFLOW_REF" = ltn-it/modulix-validation/.github/workflows/mlx90-collection-candidate-validation.yml@refs/heads/main
-            test "$CALLER_ACTOR" = 'lightning-it-release-automation[bot]'
-            test "$CALLER_ACTOR_ID" = 307565056
-            test "$CALLER_TRIGGERING_ACTOR" = "$CALLER_ACTOR"
-            test "$CALLER_ATTEMPT" = 1
-            test "$SOURCE_REPOSITORY" = ltn-it/ansible-collection-supplementary
-          fi
           case "$PROFILE" in
             heavy|application_acceptance) ;;
             *) echo "unsupported delegated profile: $PROFILE" >&2; exit 1 ;;
@@ -151,7 +121,6 @@ jobs:
           echo "profile=$PROFILE" >> "$GITHUB_OUTPUT"
 
   profile-cells:
-    if: ${{ !inputs['isolated-worker'] }}
     name: ${{ inputs.profile }} / ${{ matrix.scenario }} / ${{ matrix.target }}
     needs: validate-inputs
     strategy:
@@ -178,59 +147,6 @@ jobs:
           repository: ${{ inputs['source-repository'] || github.repository }}
           ref: ${{ inputs['source-sha'] }}
           token: ${{ secrets.LIT_REPOSITORY_READ_TOKEN || github.token }}
-          persist-credentials: false
-      - name: Set up exact Python runtime
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
-        with:
-          python-version: "3.11"
-      - name: Run validation-owned infrastructure profile
-        uses: ltn-it/modulix-validation/.github/actions/run-quality-profile@1492004c3053ebd90209f1aefe81d48e1402b205
-        with:
-          profile: ${{ needs.validate-inputs.outputs.profile }}
-          scenario: ${{ matrix.scenario }}
-          target: ${{ matrix.target }}
-          target-disposition: ${{ matrix.target_disposition || 'supported' }}
-          roles: ${{ join(matrix.roles, ',') }}
-          image: ${{ matrix.image || vars[matrix.image_variable] }}
-          instance-type: ${{ matrix.instance_type }}
-          candidate-artifact: ${{ inputs['candidate-artifact'] }}
-          source-sha: ${{ inputs['source-sha'] }}
-          junit-required: ${{ matrix.junit }}
-          allure-required: ${{ matrix.allure }}
-          cpu-limit: ${{ inputs['cpu-limit'] }}
-          memory-limit: ${{ inputs['memory-limit'] }}
-          disk-limit: ${{ inputs['disk-limit'] }}
-
-  isolated-profile-cells:
-    if: ${{ inputs['isolated-worker'] }}
-    name: ${{ inputs.profile }} / ${{ matrix.scenario }} / ${{ matrix.target }}
-    needs: validate-inputs
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix: ${{ fromJSON(inputs['matrix-json']) }}
-    runs-on:
-      group: lit-pis-prd-isolated
-      labels: [self-hosted, linux, x64, lit-pis, prd, isolated]
-    environment:
-      name: heavy-isolated-pilot
-    timeout-minutes: 90
-    concurrency:
-      # A shared group can retain only one pending job; later collection
-      # requests otherwise cancel an already queued required profile. Runner
-      # capacity still serializes jobs that target the same physical worker.
-      group: >-
-        modulix-validation-incus-${{ github.repository_id }}-${{ github.run_id }}-${{
-        github.run_attempt }}-${{ inputs.profile }}-${{ matrix.scenario }}-${{
-        matrix.target }}
-      cancel-in-progress: false
-    steps:
-      - name: Checkout exact collection source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
-        with:
-          repository: ${{ inputs['source-repository'] || github.repository }}
-          ref: ${{ inputs['source-sha'] }}
-          token: ${{ github.token }}
           persist-credentials: false
       - name: Set up exact Python runtime
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
