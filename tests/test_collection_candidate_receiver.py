@@ -86,8 +86,8 @@ class ReceiverTests(unittest.TestCase):
             for name in [
                 "Validate immutable request",
                 "Nexus exact-byte readback",
-                "Heavy / scenario / target",
-                "Application Acceptance / scenario / target",
+                "Heavy / heavy / scenario / target",
+                "Application Acceptance / application_acceptance / scenario / target",
                 "Sign validation receipt",
             ]
         ]
@@ -230,6 +230,7 @@ class ReceiverTests(unittest.TestCase):
             "duplicate",
             "attempt",
             "noop",
+            "hosted-only",
         ):
             jobs = copy.deepcopy(self.jobs)
             if mutation == "empty":
@@ -244,6 +245,8 @@ class ReceiverTests(unittest.TestCase):
                 jobs.append(jobs[2])
             elif mutation == "attempt":
                 jobs[2]["run_attempt"] = 2
+            elif mutation == "hosted-only":
+                jobs[2]["name"] = "Heavy / Validate delegated profile contract"
             else:
                 jobs[2]["name"] = "Transition no-op"
             with (
@@ -385,14 +388,19 @@ class WorkflowCodeTests(unittest.TestCase):
         for job in jobs.values():
             self.assertNotIn("continue-on-error", job)
             self.assertNotIn("if", job)
-            self.assertLessEqual(job["timeout-minutes"], 90)
+            if "uses" not in job:
+                self.assertLessEqual(job["timeout-minutes"], 90)
         self.assertEqual(jobs["sign"]["permissions"]["id-token"], "write")
-        self.assertTrue(
-            all(
-                jobs[job]["strategy"]["fail-fast"] is False
-                for job in ("heavy", "application")
-            )
-        )
+        callee = "ltn-it/modulix-validation/.github/workflows/collection-quality-profile-isolated.yml@ad5c5ff6a8505d7e16cbb9e08f24e51b533e7c5b"
+        for job, profile in [("heavy", "heavy"), ("application", "application_acceptance")]:
+            self.assertEqual(jobs[job]["uses"], callee)
+            self.assertEqual(jobs[job]["with"]["profile"], profile)
+            self.assertNotIn("secrets", jobs[job])
+            self.assertNotIn("runs-on", jobs[job])
+        self.assertIn("heavy", jobs["application"]["needs"])
+        isolated = yaml.safe_load((root / ".github/workflows/collection-quality-profile-isolated.yml").read_text())
+        self.assertFalse(isolated["jobs"]["profile-cells"]["strategy"]["fail-fast"])
+        self.assertEqual(isolated["jobs"]["profile-cells"]["strategy"]["max-parallel"], 1)
         context = (
             root / ".github/actions/collection-candidate-context/action.yml"
         ).read_text()

@@ -131,68 +131,32 @@ jobs:
           retention-days: 7
 
   heavy:
-    name: Heavy / ${{ matrix.scenario }} / ${{ matrix.target }}
+    name: Heavy
     needs: [validate, readback]
-    strategy:
-      fail-fast: false
-      max-parallel: 3
-      matrix: ${{ fromJSON(needs.validate.outputs.heavy) }}
-    runs-on: ${{ matrix.runner }}
-    environment: mlx90-final-acceptance
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
-        with:
-          repository: ltn-it/ansible-collection-supplementary
-          ref: ${{ needs.validate.outputs.source-sha }}
-          persist-credentials: false
-      - uses: ltn-it/modulix-validation/.github/actions/run-quality-profile@0a978e5be1603b70cc157d16270663db42e15771
-        with:
-          profile: heavy
-          scenario: ${{ matrix.scenario }}
-          target: ${{ matrix.target }}
-          roles: ${{ join(matrix.roles, ',') }}
-          image: ${{ matrix.image || vars[matrix.image_variable] }}
-          instance-type: ${{ matrix.instance_type }}
-          candidate-artifact: mlx90-candidate-${{ inputs.request_id }}
-          source-sha: ${{ needs.validate.outputs.source-sha }}
-          junit-required: ${{ matrix.junit }}
-          allure-required: ${{ matrix.allure }}
-          cpu-limit: '4'
-          memory-limit: 12GiB
-          disk-limit: 24GiB
+    uses: ltn-it/modulix-validation/.github/workflows/collection-quality-profile-isolated.yml@ad5c5ff6a8505d7e16cbb9e08f24e51b533e7c5b
+    with:
+      profile: heavy
+      matrix-json: ${{ needs.validate.outputs.heavy }}
+      candidate-artifact: mlx90-candidate-${{ inputs.request_id }}
+      source-sha: ${{ needs.validate.outputs.source-sha }}
+      source-repository: ltn-it/ansible-collection-supplementary
+      cpu-limit: '4'
+      memory-limit: 12GiB
+      disk-limit: 24GiB
 
   application:
-    name: Application Acceptance / ${{ matrix.scenario }} / ${{ matrix.target }}
-    needs: [validate, readback]
-    strategy:
-      fail-fast: false
-      max-parallel: 3
-      matrix: ${{ fromJSON(needs.validate.outputs.acceptance) }}
-    runs-on: ${{ matrix.runner }}
-    environment: mlx90-final-acceptance
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
-        with:
-          repository: ltn-it/ansible-collection-supplementary
-          ref: ${{ needs.validate.outputs.source-sha }}
-          persist-credentials: false
-      - uses: ltn-it/modulix-validation/.github/actions/run-quality-profile@0a978e5be1603b70cc157d16270663db42e15771
-        with:
-          profile: application_acceptance
-          scenario: ${{ matrix.scenario }}
-          target: ${{ matrix.target }}
-          roles: ${{ join(matrix.roles, ',') }}
-          image: ${{ matrix.image || vars[matrix.image_variable] }}
-          instance-type: ${{ matrix.instance_type }}
-          candidate-artifact: mlx90-candidate-${{ inputs.request_id }}
-          source-sha: ${{ needs.validate.outputs.source-sha }}
-          junit-required: ${{ matrix.junit }}
-          allure-required: ${{ matrix.allure }}
-          cpu-limit: '4'
-          memory-limit: 12GiB
-          disk-limit: 24GiB
+    name: Application Acceptance
+    needs: [validate, readback, heavy]
+    uses: ltn-it/modulix-validation/.github/workflows/collection-quality-profile-isolated.yml@ad5c5ff6a8505d7e16cbb9e08f24e51b533e7c5b
+    with:
+      profile: application_acceptance
+      matrix-json: ${{ needs.validate.outputs.acceptance }}
+      candidate-artifact: mlx90-candidate-${{ inputs.request_id }}
+      source-sha: ${{ needs.validate.outputs.source-sha }}
+      source-repository: ltn-it/ansible-collection-supplementary
+      cpu-limit: '4'
+      memory-limit: 12GiB
+      disk-limit: 24GiB
 
   sign:
     name: Sign validation receipt

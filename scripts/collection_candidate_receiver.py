@@ -219,7 +219,7 @@ def validation_receipt(request, request_id, run, jobs):
     for required in ("Validate immutable request", "Nexus exact-byte readback"):
         if names.count(required) != 1:
             raise RequestError("required receiver stage is missing")
-    for prefix in ("Heavy / ", "Application Acceptance / "):
+    for prefix in ("Heavy / heavy / ", "Application Acceptance / application_acceptance / "):
         if not any(isinstance(name, str) and name.startswith(prefix) for name in names):
             raise RequestError("real infrastructure profile execution is missing")
     identity["observations"] = {
