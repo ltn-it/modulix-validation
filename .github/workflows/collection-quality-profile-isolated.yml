@@ -177,7 +177,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Run validation-owned infrastructure profile
-        uses: ltn-it/modulix-validation/.github/actions/run-quality-profile@1492004c3053ebd90209f1aefe81d48e1402b205
+        uses: ltn-it/modulix-validation/.github/actions/run-quality-profile@24ab60baf3d67fd34af7604e0e7412a741fd0dfd
         with:
           profile: ${{ needs.validate-inputs.outputs.profile }}
           scenario: ${{ matrix.scenario }}
