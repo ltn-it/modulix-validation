@@ -308,6 +308,16 @@ disk as evidence of test-host capacity. Every Molecule phase receives the same
 scoped TLS target. Legacy schema1/container dispatch retains its VM rejection;
 these changes do not qualify an unadmitted VM or activate a host.
 
+The Root factory verifies the GitHub commit/tree and every archive blob before
+sealing the Source mount. GitHub archives contain no `.git` checkout. For this
+schema2 route, Root therefore derives `source-provenance.json` in the read-only
+candidate mount, bound by the engine descriptor. The controller checks the exact
+Source repository/commit, complete file and directory inventory, executable
+modes, sizes and Git blob IDs against that record. Scenario/registry evidence
+uses those same verified bytes. No synthetic Git commit, checkout or successful
+Git status is created. Legacy checkout execution retains its Git checks. The
+derived record is not a job-supplied proof or an independent admission grant.
+
 This remains a private integration candidate. The native Root registry/intake,
 physical Runner migration, engine, TLS/custody, VM lifecycle and complete
 acceptance are still required. The new action commit and callee/Main/Management

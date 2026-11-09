@@ -426,6 +426,11 @@ steps:
       source_sha = os.environ["QUALITY_SOURCE_SHA"]
 
       def exact_source(path):
+          if os.environ.get("QUALITY_INCUS_RUNTIME_SCHEMA") == "2":
+              import runpy
+              controller = runpy.run_path("/controller/run-cell.py", run_name="quality_source_reader")
+              entries = controller["source_snapshot"](Path("/candidate/source-provenance.json"), source_sha)
+              return controller["snapshot_blob"](Path("."), entries, path.as_posix())
           result = subprocess.run(
               ["git", "show", f"{source_sha}:{path.as_posix()}"],
               check=False,
