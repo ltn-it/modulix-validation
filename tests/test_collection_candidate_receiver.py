@@ -391,7 +391,7 @@ class WorkflowCodeTests(unittest.TestCase):
             if "uses" not in job:
                 self.assertLessEqual(job["timeout-minutes"], 90)
         self.assertEqual(jobs["sign"]["permissions"]["id-token"], "write")
-        callee = "ltn-it/modulix-validation/.github/workflows/collection-quality-profile-isolated.yml@ded19c45e6d27931d22b309fdb8a8c40884b4f49"
+        callee = "ltn-it/modulix-validation/.github/workflows/collection-quality-profile-isolated.yml@7cca68e1579e5e19222c6dba02e23b87d1f80d77"
         for job, profile in [("heavy", "heavy"), ("application", "application_acceptance")]:
             self.assertEqual(jobs[job]["uses"], callee)
             self.assertEqual(jobs[job]["with"]["profile"], profile)
