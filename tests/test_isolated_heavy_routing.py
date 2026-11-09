@@ -49,7 +49,7 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
         jobs = self.workflow["jobs"]
         isolated = jobs["profile-cells"]
         self.assertEqual(isolated["runs-on"], {"group": "lit-pis-prd-isolated",
-                         "labels": ["self-hosted", "linux", "x64", "lit-pis", "prd", "isolated",
+                         "labels": ["self-hosted", "linux", "x64", "lit-pis", "prd", "isolated", "ciwkr01",
                                     "${{ format('lit-heavy-{0}-{1}-{2}-{3}', github.run_id, github.run_attempt, inputs.profile, strategy.job-index) }}"]})
         self.assertEqual(isolated["strategy"]["max-parallel"], 1)
         self.assertEqual(isolated["environment"]["name"], "heavy-isolated-pilot")

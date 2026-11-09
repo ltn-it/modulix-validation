@@ -150,6 +150,7 @@ jobs:
         - lit-pis
         - prd
         - isolated
+        - ciwkr01
         - ${{ format('lit-heavy-{0}-{1}-{2}-{3}', github.run_id, github.run_attempt, inputs.profile, strategy.job-index) }}
     environment:
       name: heavy-isolated-pilot
