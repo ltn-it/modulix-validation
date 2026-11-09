@@ -247,7 +247,7 @@ not a claim of existing configuration. The path references no production secret
 or repository reader credential and retains only `contents: read`.
 
 The receiver delegates Heavy and then Application Acceptance to immutable
-workflow commit `ad5c5ff6a8505d7e16cbb9e08f24e51b533e7c5b`. Hosted callee input
+workflow commit `425e32db0a53ecc9f05e8a6f520521f6a4a3c841`. Hosted callee input
 validation alone cannot satisfy the receipt: nested worker cell jobs are required.
 
 Management preparation must grant the isolated reusable workflow at the same
