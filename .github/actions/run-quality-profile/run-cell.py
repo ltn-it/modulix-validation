@@ -272,6 +272,10 @@ def private_values(path: Path, *, environment: bool = False) -> dict[str, str]:
                 "QUALITY_EFFECTIVE_UID",
                 "QUALITY_EFFECTIVE_GID",
                 "QUALITY_INCUS_PROJECT",
+                "QUALITY_INCUS_RUNTIME_SCHEMA",
+                "MOLECULE_INCUS_TRANSPORT",
+                "MOLECULE_INCUS_REMOTE",
+                "MOLECULE_INCUS_PROJECT",
                 "MOLECULE_ANSIBLE_ARGS_STRICT_MODE",
             } or key.startswith("QUALITY_INPUT_"):
                 allowed = None
@@ -483,12 +487,20 @@ def validate_transport(
         "project",
         "expires_at",
     }
-    if (
-        set(binding) != keys
-        or type(binding["schema"]) is not int
-        or binding["schema"] != 1
-    ):
+    schema = binding.get("schema") if isinstance(binding, dict) else None
+    if (type(schema) is not int or schema not in (1, 2)
+            or set(binding) != keys | ({"runtime", "admission"} if schema == 2 else set())):
         raise ValueError("approved Incus binding shape differs")
+    if schema == 2:
+        runtime = binding["runtime"]
+        if (not isinstance(runtime, dict) or set(runtime) != {"firewall_controller", "bridge", "storage_pool"}
+                or runtime["firewall_controller"] != "incus"
+                or not isinstance(runtime["bridge"], dict)
+                or not isinstance(runtime["storage_pool"], str)
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,62}", runtime["storage_pool"])
+                or not isinstance(binding["admission"], str) or len(binding["admission"]) > 16384
+                or not re.fullmatch(r"[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", binding["admission"])):
+            raise ValueError("approved Incus runtime binding differs")
     for key, variable in (
         ("repository", "GITHUB_REPOSITORY"),
         ("run_id", "GITHUB_RUN_ID"),
@@ -557,6 +569,27 @@ def validate_transport(
         if not 0 < (config_root / name).stat().st_size <= 65536:
             raise ValueError("approved Incus TLS material is missing or oversized")
     return binding["project"]
+
+
+def transport_environment(environment: dict[str, str], config_root: Path) -> dict[str, str]:
+    """Derive transport selection only from the already verified private mount.
+
+    Schema2 is the Root runtime publication. Its admission signature and native
+    ownership are verified upstream by the Root issuer before engine execution;
+    this reader is not an independent signature verifier or operating grant.
+    The Source TLS helper still checks all runtime facts against the live server.
+    """
+    derived = ("QUALITY_INCUS_RUNTIME_SCHEMA", "MOLECULE_INCUS_TRANSPORT",
+               "MOLECULE_INCUS_REMOTE", "MOLECULE_INCUS_PROJECT")
+    if any(environment.get(key) for key in derived):
+        raise ValueError("caller cannot select the admitted Incus runtime transport")
+    project = validate_transport(environment, config_root)
+    binding = json.loads((config_root / "binding.json").read_text())
+    values = {"QUALITY_INCUS_PROJECT": project}
+    if binding["schema"] == 2:
+        values.update({"QUALITY_INCUS_RUNTIME_SCHEMA": "2", "MOLECULE_INCUS_TRANSPORT": "tls",
+                       "MOLECULE_INCUS_REMOTE": "quality", "MOLECULE_INCUS_PROJECT": project})
+    return values
 
 
 def prepare_molecule_phase(phase: str, directory: Path) -> None:
@@ -652,7 +685,7 @@ def main() -> int:
     ):
         if shutil.which(command) is None:
             raise ValueError(f"required managed Devtools command is absent: {command}")
-    environment["QUALITY_INCUS_PROJECT"] = validate_transport(environment, Path("/incus"))
+    environment.update(transport_environment(environment, Path("/incus")))
     inputs = {
         name: environment[f"QUALITY_INPUT_{name.upper().replace('-', '_')}"]
         for name in INPUTS

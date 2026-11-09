@@ -298,6 +298,16 @@ sanitized evidence outputs reach the artifact upload step; execution, cleanup
 and upload must all succeed before the profile can pass. Failed diagnostics can
 upload without changing a failed or cancelled result.
 
+Inside the EE, the controller accepts the Root-published schema2 transport
+binding, including its runtime facts and upstream admission. Transport mode,
+remote and project are derived from that private mount, never from job inputs
+or step command files. The Source TLS helper then checks the same runtime facts
+and live remote capacity before candidate installation. The VM route does not
+run host-wide stale-resource pruning or use the tooling container's memory and
+disk as evidence of test-host capacity. Every Molecule phase receives the same
+scoped TLS target. Legacy schema1/container dispatch retains its VM rejection;
+these changes do not qualify an unadmitted VM or activate a host.
+
 This remains a private integration candidate. The native Root registry/intake,
 physical Runner migration, engine, TLS/custody, VM lifecycle and complete
 acceptance are still required. The new action commit and callee/Main/Management
