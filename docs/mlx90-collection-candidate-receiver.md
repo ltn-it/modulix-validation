@@ -238,7 +238,10 @@ before any self-hosted worker is scheduled. The existing reusable Collection
 workflow is unchanged and grants no alternative route into the isolated group.
 
 The isolated job selects only `lit-pis-prd-isolated` with fixed `lit-pis`, `prd`
-and `isolated` labels. Matrix runner labels cannot change that selection. The
+and `isolated` labels. A further affinity label is computed from native run ID,
+attempt, profile and strategy job index, so a provisioner can register one fresh
+runner for exactly the selected queued job. Matrix runner labels cannot change
+that selection or override the affinity. The
 fixed `heavy-isolated-pilot` environment is a required configuration reference,
 not a claim of existing configuration. The path references no production secret
 or repository reader credential and retains only `contents: read`.

@@ -143,7 +143,14 @@ jobs:
       matrix: ${{ fromJSON(inputs['matrix-json']) }}
     runs-on:
       group: lit-pis-prd-isolated
-      labels: [self-hosted, linux, x64, lit-pis, prd, isolated]
+      labels:
+        - self-hosted
+        - linux
+        - x64
+        - lit-pis
+        - prd
+        - isolated
+        - ${{ format('lit-heavy-{0}-{1}-{2}-{3}', github.run_id, github.run_attempt, inputs.profile, strategy.job-index) }}
     environment:
       name: heavy-isolated-pilot
     timeout-minutes: 90
