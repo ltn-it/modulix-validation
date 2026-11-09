@@ -133,7 +133,11 @@ jobs:
   heavy:
     name: Heavy
     needs: [validate, readback]
-    uses: ltn-it/modulix-validation/.github/workflows/collection-quality-profile-isolated.yml@7cca68e1579e5e19222c6dba02e23b87d1f80d77
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    uses: ltn-it/modulix-validation/.github/workflows/collection-quality-profile-isolated.yml@d37d9716a71b5e7b5b45bd0ad68bfcbea8c412c2
     with:
       profile: heavy
       matrix-json: ${{ needs.validate.outputs.heavy }}
@@ -147,7 +151,11 @@ jobs:
   application:
     name: Application Acceptance
     needs: [validate, readback, heavy]
-    uses: ltn-it/modulix-validation/.github/workflows/collection-quality-profile-isolated.yml@7cca68e1579e5e19222c6dba02e23b87d1f80d77
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    uses: ltn-it/modulix-validation/.github/workflows/collection-quality-profile-isolated.yml@d37d9716a71b5e7b5b45bd0ad68bfcbea8c412c2
     with:
       profile: application_acceptance
       matrix-json: ${{ needs.validate.outputs.acceptance }}
