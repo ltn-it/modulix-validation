@@ -49,8 +49,11 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
         jobs = self.workflow["jobs"]
         isolated = jobs["profile-cells"]
         self.assertEqual(isolated["runs-on"], {"group": "lit-pis-prd-isolated",
-                         "labels": ["self-hosted", "linux", "x64", "lit-pis", "prd", "isolated", "ciwkr01",
-                                    "${{ format('lit-heavy-{0}-{1}-{2}-{3}', github.run_id, github.run_attempt, inputs.profile, strategy.job-index) }}"]})
+                         "labels": ["self-hosted", "linux", "x64", "lit-pis", "prd", "isolated", "ciwkr01"]})
+        # Routing remains stable across jobs; run identity belongs to owned
+        # Incus test VMs and native admission, not a newly registered Runner VM.
+        self.assertNotIn("strategy.job-index", str(isolated["runs-on"]))
+        self.assertNotIn("github.run_id", str(isolated["runs-on"]))
         self.assertEqual(isolated["strategy"]["max-parallel"], 1)
         self.assertEqual(isolated["environment"]["name"], "heavy-isolated-pilot")
         self.assertEqual(set(jobs), {"validate-inputs", "profile-cells"})
@@ -58,6 +61,13 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
         self.assertEqual(isolated["needs"], "validate-inputs")
         self.assertNotIn("secrets.", json.dumps(isolated))
         self.assertEqual(self.workflow["permissions"], {"contents": "read"})
+        self.assertEqual(isolated["permissions"], {"contents": "read", "actions": "read", "id-token": "write"})
+        self.assertEqual(len(isolated["steps"]), 1)
+        action = isolated["steps"][0]
+        self.assertRegex(action["uses"], r"^ltn-it/modulix-validation/\.github/actions/run-incus-runtime-profile@[0-9a-f]{40}$")
+        self.assertEqual(set(action["with"]), set(yaml.safe_load((ROOT / ".github/actions/run-incus-runtime-profile/action.yml").read_text())["inputs"]))
+        self.assertNotIn("actions/checkout", json.dumps(isolated))
+        self.assertNotIn("actions/setup-python", json.dumps(isolated))
 
     def test_validation_caller_cannot_bypass_group_admission_through_legacy_mode(self):
         self.assertNotEqual(self.invoke(ISOLATED_WORKER="false", CALLER_REPOSITORY="ltn-it/fixture"), 0)

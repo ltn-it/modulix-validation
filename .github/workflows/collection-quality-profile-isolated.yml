@@ -151,7 +151,6 @@ jobs:
         - prd
         - isolated
         - ciwkr01
-        - ${{ format('lit-heavy-{0}-{1}-{2}-{3}', github.run_id, github.run_attempt, inputs.profile, strategy.job-index) }}
     environment:
       name: heavy-isolated-pilot
     timeout-minutes: 90
@@ -159,25 +158,19 @@ jobs:
       # A shared group can retain only one pending job; later collection
       # requests otherwise cancel an already queued required profile. Runner
       # capacity still serializes jobs that target the same physical worker.
+      # The Runner service stays on ciwkr01; Incus VMs are the disposable test targets.
       group: >-
         modulix-validation-incus-${{ github.repository_id }}-${{ github.run_id }}-${{
         github.run_attempt }}-${{ inputs.profile }}-${{ matrix.scenario }}-${{
         matrix.target }}
       cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
     steps:
-      - name: Checkout exact collection source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
-        with:
-          repository: ${{ inputs['source-repository'] || github.repository }}
-          ref: ${{ inputs['source-sha'] }}
-          token: ${{ github.token }}
-          persist-credentials: false
-      - name: Set up exact Python runtime
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
-        with:
-          python-version: "3.11"
-      - name: Run validation-owned infrastructure profile
-        uses: ltn-it/modulix-validation/.github/actions/run-quality-profile@24ab60baf3d67fd34af7604e0e7412a741fd0dfd
+      - name: Run prepared Incus cell through the installed host runtime
+        uses: ltn-it/modulix-validation/.github/actions/run-incus-runtime-profile@dd1b8859b30b5e40b1d166ee25c8e5e5f4113675
         with:
           profile: ${{ needs.validate-inputs.outputs.profile }}
           scenario: ${{ matrix.scenario }}
