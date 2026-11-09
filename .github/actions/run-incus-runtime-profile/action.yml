@@ -1,0 +1,59 @@
+---
+name: Run controller-owned Incus profile
+description: Request one prepared cell from the installed Root runtime on the existing physical runner.
+
+inputs:
+  profile:
+    description: Heavy or Application Acceptance profile.
+    required: true
+  scenario:
+    description: Exact prepared Molecule scenario.
+    required: true
+  target:
+    description: Exact prepared matrix target.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Require installed Root runtime before requesting a test cell
+      shell: bash
+      run: |
+        set -euo pipefail
+        /usr/libexec/lightning-it/incus-runtime-client check
+
+    - name: Execute and verify the prepared Incus test cell
+      id: cell
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        RUNTIME_PROFILE: ${{ inputs.profile }}
+        RUNTIME_SCENARIO: ${{ inputs.scenario }}
+        RUNTIME_TARGET: ${{ inputs.target }}
+      run: |
+        set -euo pipefail
+        exec /usr/libexec/lightning-it/incus-runtime-client run-profile \
+          --profile "$RUNTIME_PROFILE" \
+          --scenario "$RUNTIME_SCENARIO" \
+          --target "$RUNTIME_TARGET"
+
+    - name: Upload verified sanitized cell evidence
+      id: upload
+      if: always() && steps.cell.outputs.package-directory != '' && steps.cell.outputs.result-artifact != ''
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+      with:
+        name: ${{ steps.cell.outputs.result-artifact }}
+        path: ${{ steps.cell.outputs.package-directory }}
+        if-no-files-found: error
+        retention-days: 30
+
+    - name: Require actual execution and artifact upload success
+      if: always()
+      shell: bash
+      env:
+        CELL_OUTCOME: ${{ steps.cell.outcome }}
+        UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+      run: |
+        set -euo pipefail
+        test "$CELL_OUTCOME" = success
+        test "$UPLOAD_OUTCOME" = success
