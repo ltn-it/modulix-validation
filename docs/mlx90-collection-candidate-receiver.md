@@ -227,3 +227,36 @@ artifact output; unconfirmed capture or destruction preserves private recovery
 state through container exit. Runner-loss recovery still requires the established
 ownership-aware stale-resource collector; a container lifetime is not proof of
 cleanup after runner loss.
+
+## Isolated Heavy worker routing candidate
+
+The reusable `collection-quality-profile.yml` accepts an explicit boolean
+`isolated-worker`, defaulting to false for existing callers. Its isolated path
+admits only the existing Validation repository identity and Main candidate
+receiver, the native release App actor, its original triggering actor,
+`workflow_dispatch`, and attempt one. Pull requests, fork repositories, other
+workflows, branch substitutions and human reruns fail in hosted validation
+before any self-hosted worker is scheduled.
+
+The isolated job selects only `lit-pis-prd-isolated` with the fixed `lit-pis`,
+`prd` and `isolated` labels. Neither matrix runner labels nor a caller-supplied
+environment can change that selection. The dedicated `heavy-isolated-pilot`
+environment is a required configuration reference, not a claim of existing
+configuration. This path references no production credential or repository
+reader secret and retains only the workflow's `contents: read` permission.
+
+The management plan must grant this reusable workflow at the exact commit
+observed on protected Develop. After that source is integrated, the Main
+receiver must call the same immutable commit explicitly with
+`isolated-worker: true`. Main request, producer-run and signed-receipt checks
+remain unchanged. This candidate does not yet change the existing receiver's
+direct jobs or issue an eligible receipt through the new path.
+
+Each matrix is serial. The external trusted provisioner must additionally
+serialize all runs and both profiles globally, create a fresh Incus worker VM
+for exactly one ephemeral registration, validate native VM/group/job ownership,
+apply egress policy, retain diagnostics and deregister/destroy owned resources.
+An independent collector must cover runner loss and report cleanup failure to
+Atlas on Wunderbox. Neither the routing labels nor these workflow checks prove
+VM provenance, global capacity, cleanup or operating acceptance. The existing
+VM-input qualification hold also remains in effect.

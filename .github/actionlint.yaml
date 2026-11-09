@@ -6,3 +6,6 @@ self-hosted-runner:
     - incus
     - nested-virt
     - aap
+    - lit-pis
+    - prd
+    - isolated
