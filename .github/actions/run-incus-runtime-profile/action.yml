@@ -4,13 +4,47 @@ description: Request one prepared cell from the installed Root runtime on the ex
 
 inputs:
   profile:
-    description: Heavy or Application Acceptance profile.
+    description: Quality profile name.
     required: true
   scenario:
-    description: Exact prepared Molecule scenario.
+    description: Molecule scenario name.
     required: true
   target:
-    description: Exact prepared matrix target.
+    description: Registry target name.
+    required: true
+  target-disposition:
+    description: Registry target disposition; candidate runs can never produce release evidence.
+    required: false
+    default: supported
+  roles:
+    description: Comma-separated roles covered by this scenario.
+    required: true
+  image:
+    description: Resolved Incus image.
+    required: true
+  instance-type:
+    description: Expected instance type from the prepared Root cell policy.
+    required: true
+  candidate-artifact:
+    description: Name of the exact collection candidate artifact.
+    required: true
+  source-sha:
+    description: Reviewed source commit represented by the candidate and evidence.
+    required: true
+  junit-required:
+    description: Whether the registry requires a unique scenario JUnit report.
+    required: true
+  allure-required:
+    description: Whether the registry requires final Allure results.
+    required: true
+  cpu-limit:
+    description: Incus CPU limit.
+    required: true
+  memory-limit:
+    description: Incus memory limit.
+    required: true
+  disk-limit:
+    description: Incus root disk limit.
     required: true
 
 runs:
@@ -27,15 +61,26 @@ runs:
       shell: bash
       env:
         GITHUB_TOKEN: ${{ github.token }}
-        RUNTIME_PROFILE: ${{ inputs.profile }}
-        RUNTIME_SCENARIO: ${{ inputs.scenario }}
-        RUNTIME_TARGET: ${{ inputs.target }}
+        QUALITY_INPUT_PROFILE: ${{ inputs.profile }}
+        QUALITY_INPUT_SCENARIO: ${{ inputs.scenario }}
+        QUALITY_INPUT_TARGET: ${{ inputs.target }}
+        QUALITY_INPUT_TARGET_DISPOSITION: ${{ inputs.target-disposition }}
+        QUALITY_INPUT_ROLES: ${{ inputs.roles }}
+        QUALITY_INPUT_IMAGE: ${{ inputs.image }}
+        QUALITY_INPUT_INSTANCE_TYPE: ${{ inputs.instance-type }}
+        QUALITY_INPUT_CANDIDATE_ARTIFACT: ${{ inputs.candidate-artifact }}
+        QUALITY_INPUT_SOURCE_SHA: ${{ inputs.source-sha }}
+        QUALITY_INPUT_JUNIT_REQUIRED: ${{ inputs.junit-required }}
+        QUALITY_INPUT_ALLURE_REQUIRED: ${{ inputs.allure-required }}
+        QUALITY_INPUT_CPU_LIMIT: ${{ inputs.cpu-limit }}
+        QUALITY_INPUT_MEMORY_LIMIT: ${{ inputs.memory-limit }}
+        QUALITY_INPUT_DISK_LIMIT: ${{ inputs.disk-limit }}
       run: |
         set -euo pipefail
         exec /usr/libexec/lightning-it/incus-runtime-client run-profile \
-          --profile "$RUNTIME_PROFILE" \
-          --scenario "$RUNTIME_SCENARIO" \
-          --target "$RUNTIME_TARGET"
+          --profile "$QUALITY_INPUT_PROFILE" \
+          --scenario "$QUALITY_INPUT_SCENARIO" \
+          --target "$QUALITY_INPUT_TARGET"
 
     - name: Upload verified sanitized cell evidence
       id: upload

@@ -19,14 +19,16 @@ class PhysicalRuntimeActionTests(unittest.TestCase):
         self.steps = self.action['runs']['steps']
 
     def test_no_candidate_download_engine_command_or_job_selected_endpoint(self):
-        self.assertEqual(set(self.action['inputs']), {'profile', 'scenario', 'target'})
+        self.assertEqual(set(self.action['inputs']), {'profile', 'scenario', 'target', 'target-disposition', 'roles', 'image',
+            'instance-type', 'candidate-artifact', 'source-sha', 'junit-required', 'allure-required', 'cpu-limit', 'memory-limit', 'disk-limit'})
         self.assertEqual(self.action['runs']['using'], 'composite')
         self.assertEqual(self.steps[0]['run'].strip().splitlines()[-1], CLIENT + ' check')
         execution = next(step for step in self.steps if step.get('id') == 'cell')
         self.assertIn('exec ' + CLIENT + ' run-profile', execution['run'])
-        self.assertEqual(execution['env'], {'GITHUB_TOKEN': '${{ github.token }}',
-            'RUNTIME_PROFILE': '${{ inputs.profile }}', 'RUNTIME_SCENARIO': '${{ inputs.scenario }}',
-            'RUNTIME_TARGET': '${{ inputs.target }}'})
+        expected = {'GITHUB_TOKEN': '${{ github.token }}'}
+        expected.update({'QUALITY_INPUT_' + name.upper().replace('-', '_'): '${{ inputs.' + name + ' }}'
+                         for name in self.action['inputs']})
+        self.assertEqual(execution['env'], expected)
         text = json.dumps(self.action)
         for forbidden in ('download-artifact', 'secrets.', 'sudo ', 'docker ', 'podman ', 'incus exec',
                           '--socket', '--config', '--command', '--token', 'continue-on-error'):
@@ -47,14 +49,14 @@ class PhysicalRuntimeActionTests(unittest.TestCase):
             execution = next(step for step in self.steps if step.get('id') == 'cell')
             script = execution['run'].replace(CLIENT, str(program))
             environment = dict(os.environ, CAPTURE=str(output), GITHUB_TOKEN='synthetic-not-an-api-token',
-                               RUNTIME_PROFILE='heavy', RUNTIME_SCENARIO='name with spaces; echo unsafe',
-                               RUNTIME_TARGET='ubuntu24')
+                               QUALITY_INPUT_PROFILE='heavy', QUALITY_INPUT_SCENARIO='name with spaces; echo unsafe',
+                               QUALITY_INPUT_TARGET='ubuntu24')
             result = subprocess.run(['bash', '-c', script], env=environment,
                                     capture_output=True, text=True, timeout=10)
             self.assertEqual(result.returncode, 0, result.stderr)
             captured = json.loads(output.read_text())
             self.assertEqual(captured['argv'], ['run-profile', '--profile', 'heavy', '--scenario',
-                                              environment['RUNTIME_SCENARIO'], '--target', 'ubuntu24'])
+                                              environment['QUALITY_INPUT_SCENARIO'], '--target', 'ubuntu24'])
             self.assertTrue(captured['api_token_present'])
             self.assertNotIn(environment['GITHUB_TOKEN'], json.dumps(captured['argv']))
 
