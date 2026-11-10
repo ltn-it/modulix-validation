@@ -1,0 +1,75 @@
+---
+name: Compile protected Incus profile admission
+description: Validate caller identity and compile a closed typed matrix before worker scheduling.
+inputs:
+  profile:
+    required: true
+    description: Heavy or Application Acceptance profile.
+  matrix-json:
+    required: true
+    description: Registry-produced include-only matrix.
+  source-sha:
+    required: true
+    description: Exact producer commit.
+  source-repository:
+    required: true
+    description: Protected producer repository.
+  candidate-artifact:
+    required: true
+    description: Exact read-back candidate artifact.
+  cpu-limit:
+    required: true
+    description: Fixed pilot CPU limit.
+  memory-limit:
+    required: true
+    description: Fixed pilot memory limit.
+  disk-limit:
+    required: true
+    description: Fixed pilot disk limit.
+outputs:
+  profile:
+    value: ${{ steps.compile.outputs.profile }}
+    description: Admitted profile.
+  matrix-json:
+    value: ${{ steps.compile.outputs.matrix-json }}
+    description: Canonical include-only typed matrix; sole scheduling input.
+runs:
+  using: composite
+  steps:
+    - id: compile
+      name: Compile all admission inputs in pinned offline Devtools
+      shell: bash
+      env:
+        ADMISSION_ACTION_PATH: ${{ github.action_path }}
+        PROFILE: ${{ inputs.profile }}
+        MATRIX_JSON: ${{ inputs.matrix-json }}
+        SOURCE_SHA: ${{ inputs.source-sha }}
+        SOURCE_REPOSITORY: ${{ inputs.source-repository }}
+        CANDIDATE_ARTIFACT: ${{ inputs.candidate-artifact }}
+        CPU_LIMIT: ${{ inputs.cpu-limit }}
+        MEMORY_LIMIT: ${{ inputs.memory-limit }}
+        DISK_LIMIT: ${{ inputs.disk-limit }}
+        CALLER_REPOSITORY: ${{ github.repository }}
+        CALLER_REPOSITORY_ID: ${{ github.repository_id }}
+        CALLER_EVENT: ${{ github.event_name }}
+        CALLER_REF: ${{ github.ref }}
+        CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
+        CALLER_ACTOR: ${{ github.actor }}
+        CALLER_ACTOR_ID: ${{ github.actor_id }}
+        CALLER_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        CALLER_ATTEMPT: ${{ github.run_attempt }}
+      run: |
+        set -euo pipefail
+        # This action is immutable, downloaded by Actions; no candidate checkout.
+        # Only its own public compiler directory is mounted, read-only.
+        docker run --rm --entrypoint "" --read-only --network none \
+          --user 1000:1000 --cap-drop ALL --security-opt no-new-privileges=true \
+          --pids-limit 128 --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
+          -v "$ADMISSION_ACTION_PATH:/admission:ro" \
+          -e PROFILE -e MATRIX_JSON -e SOURCE_SHA -e SOURCE_REPOSITORY \
+          -e CANDIDATE_ARTIFACT -e CPU_LIMIT -e MEMORY_LIMIT -e DISK_LIMIT \
+          -e CALLER_REPOSITORY -e CALLER_REPOSITORY_ID -e CALLER_EVENT -e CALLER_REF \
+          -e CALLER_WORKFLOW_REF -e CALLER_ACTOR -e CALLER_ACTOR_ID \
+          -e CALLER_TRIGGERING_ACTOR -e CALLER_ATTEMPT \
+          quay.io/l-it/ee-wunder-devtools-ubi9:v1.18.2@sha256:58955457d3410706520f34fa7ea9823d5650aa4844c562cd5c0107024d825711 \
+          python3 /admission/admission.py >> "$GITHUB_OUTPUT"

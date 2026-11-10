@@ -1,0 +1,186 @@
+"""Compile the closed protected Main admission contract before worker scheduling."""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import sys
+
+MAX_BYTES = 65536
+MAX_CELLS = 256
+IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,62}")
+ROLE = re.compile(r"[a-z][a-z0-9_]{0,62}")
+IMAGE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,511}")
+VARIABLE = re.compile(r"[A-Z][A-Z0-9_]{0,127}")
+RUNNERS = (
+    ("self-hosted", "linux", "x64", "incus"),
+    ("self-hosted", "linux", "x64", "incus", "keycloak-test"),
+)
+FIELDS = {
+    "scenario",
+    "component",
+    "profile",
+    "target",
+    "target_disposition",
+    "release_required",
+    "instance_type",
+    "runner",
+    "roles",
+    "junit",
+    "allure",
+    "evidence",
+}
+CALLER = {
+    "CALLER_REPOSITORY": "ltn-it/modulix-validation",
+    "CALLER_REPOSITORY_ID": "1269461997",
+    "CALLER_EVENT": "workflow_dispatch",
+    "CALLER_REF": "refs/heads/main",
+    "CALLER_WORKFLOW_REF": "ltn-it/modulix-validation/.github/workflows/mlx90-collection-candidate-validation.yml@refs/heads/main",
+    "CALLER_ACTOR": "lightning-it-release-automation[bot]",
+    "CALLER_ACTOR_ID": "307565056",
+    "CALLER_TRIGGERING_ACTOR": "lightning-it-release-automation[bot]",
+    "CALLER_ATTEMPT": "1",
+    "SOURCE_REPOSITORY": "ltn-it/ansible-collection-supplementary",
+    "CPU_LIMIT": "4",
+    "MEMORY_LIMIT": "12GiB",
+    "DISK_LIMIT": "24GiB",
+}
+
+
+class Refused(ValueError):
+    """Public bounded category; never echo supplied input."""
+
+
+def require(condition, category):
+    if not condition:
+        raise Refused(category)
+
+
+def text(value, pattern):
+    return isinstance(value, str) and pattern.fullmatch(value) is not None
+
+
+def unique(pairs):
+    result = {}
+    for key, value in pairs:
+        require(key not in result, "duplicate-json-key")
+        result[key] = value
+    return result
+
+
+def nonfinite(_value):
+    raise Refused("nonfinite-json-number")
+
+
+def compile_matrix(raw, profile):
+    require(profile in ("heavy", "application_acceptance"), "profile")
+    require(
+        isinstance(raw, str) and 0 < len(raw.encode("utf-8")) <= MAX_BYTES,
+        "matrix-size",
+    )
+    document = json.loads(raw, object_pairs_hook=unique, parse_constant=nonfinite)
+    require(
+        isinstance(document, dict) and set(document) == {"include"},
+        "matrix-outer-shape",
+    )
+    cells = document["include"]
+    require(
+        isinstance(cells, list) and 1 <= len(cells) <= MAX_CELLS, "matrix-cell-count"
+    )
+    result, seen = [], set()
+    for cell in cells:
+        require(isinstance(cell, dict), "matrix-cell-shape")
+        selectors = set(cell) & {"image", "image_variable"}
+        require(
+            len(selectors) == 1 and set(cell) == FIELDS | selectors,
+            "matrix-cell-fields",
+        )
+        for key in ("scenario", "target"):
+            require(text(cell[key], IDENTIFIER), "matrix-identifier")
+        roles = cell["roles"]
+        require(
+            isinstance(roles, list)
+            and 1 <= len(roles) <= MAX_CELLS
+            and all(text(role, ROLE) for role in roles),
+            "matrix-roles",
+        )
+        require(len(set(roles)) == len(roles), "duplicate-role")
+        component = cell["component"]
+        require(isinstance(component, str), "matrix-component")
+        parts = component.split("+")
+        require(
+            1 <= len(parts) <= len(roles)
+            and all(text(part, IDENTIFIER) for part in parts)
+            and parts == sorted(set(parts)),
+            "matrix-component",
+        )
+        require(cell["profile"] == profile, "matrix-profile")
+        require(
+            cell["target_disposition"] == "supported"
+            and cell["release_required"] is True,
+            "matrix-release-disposition",
+        )
+        require(cell["instance_type"] in ("container", "vm"), "matrix-instance-type")
+        runner = cell["runner"]
+        require(
+            isinstance(runner, list)
+            and all(isinstance(label, str) for label in runner)
+            and tuple(runner) in RUNNERS,
+            "matrix-runner",
+        )
+        require(
+            all(isinstance(cell[key], bool) for key in ("junit", "allure", "evidence")),
+            "matrix-boolean",
+        )
+        selector = next(iter(selectors))
+        require(
+            text(cell[selector], IMAGE if selector == "image" else VARIABLE),
+            "matrix-image",
+        )
+        identity = (cell["scenario"], cell["target"])
+        require(identity not in seen, "duplicate-cell")
+        seen.add(identity)
+        result.append(dict(cell))
+    canonical = json.dumps(
+        {"include": result}, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    )
+    require(len(canonical.encode("ascii")) <= MAX_BYTES, "canonical-matrix-size")
+    return canonical
+
+
+def admit(environment):
+    require(
+        all(environment.get(key) == value for key, value in CALLER.items()),
+        "caller-or-pilot-binding",
+    )
+    profile = environment.get("PROFILE")
+    require(profile in ("heavy", "application_acceptance"), "profile")
+    require(
+        text(environment.get("SOURCE_SHA"), re.compile(r"[0-9a-f]{40}")), "source-sha"
+    )
+    require(
+        text(
+            environment.get("CANDIDATE_ARTIFACT"),
+            re.compile(r"mlx90-candidate-[0-9a-f]{64}"),
+        ),
+        "candidate-artifact",
+    )
+    return profile, compile_matrix(environment.get("MATRIX_JSON"), profile)
+
+
+def main():
+    try:
+        require(len(sys.argv) == 1, "closed-argv")
+        profile, matrix = admit(os.environ)
+    except (ValueError, TypeError, UnicodeError, RecursionError):
+        print("Incus admission refused", file=sys.stderr)
+        return 2
+    # No output is produced until the complete identity and every cell validate.
+    print("profile=" + profile)
+    print("matrix-json=" + matrix)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
