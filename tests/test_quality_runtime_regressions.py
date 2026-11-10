@@ -40,11 +40,13 @@ class QualityRuntimeRegressions(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             calls = root / "incus-calls"
+            binary = root / "bin"
+            binary.mkdir()
             for command in ("molecule", "openssl"):
-                path = root / command
+                path = binary / command
                 path.write_text("#!/bin/sh\nexit 0\n")
                 path.chmod(0o755)
-            installer = root / "ansible-galaxy"
+            installer = binary / "ansible-galaxy"
             installed = root / "install-calls"
             installer.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$INSTALL_CALLS"\n')
             installer.chmod(0o755)
@@ -58,7 +60,7 @@ class QualityRuntimeRegressions(unittest.TestCase):
             checksums = [f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n" for path in candidate.iterdir()]
             (candidate / "candidate-SHA256SUMS").write_text("".join(checksums))
             (root / "galaxy.yml").write_text("dependencies: {}\n")
-            incus = root / "incus"
+            incus = binary / "incus"
             incus.write_text(
                 '#!/bin/sh\nprintf "%s\\n" "$*" >> "$INCUS_CALLS"\n'
                 'if [ "$1" = query ]; then printf "%s\\n" "$SERVER_METADATA"; fi\n'
@@ -66,16 +68,23 @@ class QualityRuntimeRegressions(unittest.TestCase):
             incus.chmod(0o755)
             # Capacity is a separate preflight contract; give this container
             # regression deterministic sufficient disk and client memory.
-            df = root / "df"
+            df = binary / "df"
             df.write_text("#!/bin/sh\nsleep 0.05\nprintf 'fixture disk output\\n'\n")
             df.chmod(0o755)
-            awk = root / "awk"
+            awk = binary / "awk"
             # Drain a piped df before exiting; otherwise pipefail can observe
             # df's SIGPIPE and fail the VM test before remote admission.
             awk.write_text("#!/bin/sh\nif [ \"$#\" -eq 1 ]; then cat >/dev/null; fi\nprintf '20971520\\n'\n")
             awk.chmod(0o755)
             (root / "scripts").mkdir()
             (root / "scripts/prune_stale_incus_resources.py").write_text("")
+            tls = root / "molecule/shared/incus/helpers/tls_transport.py"
+            tls.parent.mkdir(parents=True)
+            tls.write_text("import os,sys,json\nfrom pathlib import Path\n"
+                           "assert os.environ['MOLECULE_INCUS_TRANSPORT']=='tls'\n"
+                           "assert os.environ['MOLECULE_INCUS_REMOTE']=='quality'\n"
+                           "assert os.environ['MOLECULE_INCUS_PROJECT']=='bound-test-project'\n"
+                           "Path('tls-readback').write_text(json.dumps(sys.argv[1:]))\n")
             # An ordinary container does not need a qemu capability query.
             for metadata, expected in (
                 ({}, 0),
@@ -85,7 +94,9 @@ class QualityRuntimeRegressions(unittest.TestCase):
                     installed.unlink(missing_ok=True)
                     result = subprocess.run(
                         ["bash", "-c", phase["run"]], cwd=root,
-                        env={**os.environ, "PATH": f"{root}:{os.environ['PATH']}",
+                        # Keep fixture recorders first; the EE's noninteractive
+                        # Bash startup otherwise reactivates its own venv.
+                        env={**os.environ, "BASH_ENV": "/dev/null", "PATH": f"{binary}:{os.environ['PATH']}",
                              "KEYCLOAK_TEST_INSTANCE_TYPE": "container", "RUNNER_TEMP": str(root),
                              "GITHUB_REPOSITORY": "ltn-it/modulix-validation", "GITHUB_RUN_ID": "123",
                              "INCUS_CALLS": str(calls), "SERVER_METADATA": json.dumps(metadata),
@@ -93,9 +104,31 @@ class QualityRuntimeRegressions(unittest.TestCase):
                              "GITHUB_ENV": str(root / "environment"), "INSTALL_CALLS": str(installed)},
                         capture_output=True, text=True, check=False,
                     )
-                    self.assertEqual(expected, int(result.returncode != 0), result.stderr)
+                    self.assertEqual(expected, int(result.returncode != 0), result.stderr + result.stdout)
                     self.assertNotIn("query quality:/1.0", calls.read_text())
                     self.assertEqual(expected == 0, installed.exists())
+
+            # The new Root-published schema2 route must execute the actual
+            # remote-aware Source helper before installing a VM candidate.
+            calls.unlink(missing_ok=True)
+            installed.unlink(missing_ok=True)
+            result = subprocess.run(["bash", "-c", phase["run"]], cwd=root,
+                env={**os.environ, "BASH_ENV": "/dev/null", "PATH": f"{binary}:{os.environ['PATH']}",
+                     "KEYCLOAK_TEST_INSTANCE_TYPE": "vm", "KEYCLOAK_TEST_INSTANCE": "bound-vm",
+                     "QUALITY_INCUS_RUNTIME_SCHEMA": "2", "MOLECULE_INCUS_TRANSPORT": "tls",
+                     "MOLECULE_INCUS_REMOTE": "quality", "MOLECULE_INCUS_PROJECT": "bound-test-project",
+                     "QUALITY_INCUS_PROJECT": "bound-test-project", "MOLECULE_TEST_OWNER": "fixture-owner",
+                     "GITHUB_REPOSITORY": "ltn-it/modulix-validation", "GITHUB_RUN_ID": "123",
+                     "GITHUB_RUN_ATTEMPT": "1", "QUALITY_CANDIDATE_ROOT": str(candidate),
+                     "QUALITY_INSTALL_ROOT": str(root / "install"), "GITHUB_ENV": str(root / "environment"),
+                     "INCUS_CALLS": str(calls), "INSTALL_CALLS": str(installed)},
+                capture_output=True, text=True, check=False)
+            self.assertEqual(0, result.returncode, result.stderr + result.stdout)
+            self.assertTrue(installed.exists())
+            self.assertFalse(calls.exists(), "remote VM path must not run host-wide Incus commands")
+            actual = json.loads((root / "tls-readback").read_text())
+            self.assertEqual('[["bound-vm","vm"]]', actual[actual.index("--platforms")+1])
+            self.assertIn("--capacity", actual)
 
     def test_vm_profile_rejects_before_any_process_cleanup_or_install(self):
         steps = yaml.safe_load((ACTION / "profile-steps.yml").read_text())["steps"]

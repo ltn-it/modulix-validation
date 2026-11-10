@@ -694,19 +694,62 @@ class ProtectedIncusContextTests(unittest.TestCase):
             self.assertNotEqual(0, self.invoke(mode="--quality-incus-v1-check", **changes).returncode)
             self.assertEqual([], self.calls())
 
-    def test_rootless_podman_is_explicitly_unsupported_before_mount(self):
+    def podman_identity(self, value: str, *, status: int = 0) -> None:
         podman = self.binary / "podman"
         podman.write_text(self.engine.read_text().replace(
             "if args[0] == 'info': raise SystemExit(0)",
-            "if args[0] == 'info': print('true'); raise SystemExit(0)",
+            f"if args[0] == 'info': print({value!r}); raise SystemExit({status})",
         ))
         podman.chmod(0o755)
+
+    def test_rootless_podman_preserves_host_ownership_with_namespace_zero(self):
+        self.podman_identity("true")
         result = self.invoke(WUNDER_CONTAINER_ENGINE="podman")
-        self.assertNotEqual(0, result.returncode)
-        self.assertIn("does not admit rootless Podman", result.stderr)
-        self.assertEqual(1, len(self.calls()))
+        self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual("info", self.calls()[0][0])
-        self.assertEqual("", self.output.read_text())
+        runs = [call for call in self.calls() if call[0] == "run"]
+        self.assertEqual(2, len(runs))
+        for call in runs:
+            self.assertEqual("0:0", call[call.index("--user") + 1])
+            self.assertIn("--read-only-tmpfs=false", call)
+            self.assertNotIn("--userns=keep-id", call)
+            self.assertIn("--read-only", call)
+            self.assertEqual("ALL", call[call.index("--cap-drop") + 1])
+            self.assertIn("no-new-privileges=true", call)
+            self.assertEqual("512", call[call.index("--pids-limit") + 1])
+            self.assertIn("/tmp/wunder:rw,exec,nosuid,nodev,size=1g,mode=1777", call)
+            self.assertFalse(any("uid=" in value or "gid=" in value
+                                 for value in call if value.startswith("/tmp/wunder:")))
+            self.assertFalse(any("sock" in value for value in call
+                                 if value.startswith("type=bind,")))
+        runtime = runs[1]
+        self.assertIn(f"QUALITY_HOST_UID={self.runner_uid}", runtime)
+        self.assertIn("QUALITY_EFFECTIVE_UID=0", runtime)
+        self.assertIn("QUALITY_EFFECTIVE_GID=0", runtime)
+        self.assertEqual(2, len(self.output.read_text().splitlines()))
+
+    def test_rootful_podman_keeps_numeric_host_identity(self):
+        self.podman_identity("false")
+        result = self.invoke(WUNDER_CONTAINER_ENGINE="podman")
+        self.assertEqual(0, result.returncode, result.stderr)
+        runs = [call for call in self.calls() if call[0] == "run"]
+        self.assertEqual(2, len(runs))
+        for call in runs:
+            self.assertEqual(f"{self.runner_uid}:{self.runner_gid}", call[call.index("--user") + 1])
+            self.assertIn(f"/tmp/wunder:rw,exec,nosuid,nodev,size=1g,mode=1777,uid={self.runner_uid},gid={self.runner_gid}", call)
+        self.assertIn(f"QUALITY_EFFECTIVE_UID={self.runner_uid}", runs[1])
+        self.assertIn(f"QUALITY_EFFECTIVE_GID={self.runner_gid}", runs[1])
+
+    def test_podman_unknown_identity_stops_before_mount(self):
+        for value, status in (("", 0), ("TRUE", 0), ("false\ntrue", 0), ("true", 1)):
+            with self.subTest(value=value, status=status):
+                self.trace.unlink(missing_ok=True)
+                self.podman_identity(value, status=status)
+                result = self.invoke(WUNDER_CONTAINER_ENGINE="podman")
+                self.assertNotEqual(0, result.returncode)
+                self.assertEqual(1, len(self.calls()))
+                self.assertEqual("info", self.calls()[0][0])
+                self.assertEqual("", self.output.read_text())
 
     def test_actual_preflight_program_checks_tls_and_run_binding_offline(self):
         import datetime

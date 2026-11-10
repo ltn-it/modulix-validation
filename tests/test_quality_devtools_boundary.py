@@ -350,6 +350,29 @@ class QualityDevtoolsBoundaryTests(unittest.TestCase):
                 "GITHUB_RUN_ATTEMPT": "1",
             }
             self.assertEqual(binding["project"], module.validate_transport(environment, root, now=now))
+            self.assertEqual({"QUALITY_INCUS_PROJECT": binding["project"]},
+                             module.transport_environment(environment, root))
+            modern = {**binding, "schema": 2, "runtime": {"firewall_controller": "incus",
+                      "bridge": {}, "storage_pool": "fixture-pool"}, "admission": "fixture.claim.signature"}
+            path.write_text(json.dumps(modern))
+            self.assertEqual({"QUALITY_INCUS_PROJECT": binding["project"], "QUALITY_INCUS_RUNTIME_SCHEMA": "2",
+                              "MOLECULE_INCUS_TRANSPORT": "tls", "MOLECULE_INCUS_REMOTE": "quality",
+                              "MOLECULE_INCUS_PROJECT": binding["project"]},
+                             module.transport_environment(environment, root))
+            for key in ("QUALITY_INCUS_RUNTIME_SCHEMA", "MOLECULE_INCUS_TRANSPORT",
+                        "MOLECULE_INCUS_REMOTE", "MOLECULE_INCUS_PROJECT"):
+                with self.subTest(key=key), self.assertRaises(ValueError):
+                    module.transport_environment({**environment, key: "forged"}, root)
+                carrier = root / "carrier"
+                carrier.write_text(key + "=forged\n")
+                with self.assertRaises(ValueError):
+                    module.private_values(carrier, environment=True)
+                carrier.unlink()
+            for changed in ({"admission": "unsigned"}, {"runtime": {}}, {"schema": True}):
+                path.write_text(json.dumps({**modern, **changed}))
+                with self.subTest(changed=changed), self.assertRaises(ValueError):
+                    module.transport_environment(environment, root)
+            path.write_text(json.dumps(binding))
             for changed in (
                 {"run_attempt": "2"},
                 {"run_id": "124"},

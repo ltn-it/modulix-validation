@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import shutil
@@ -12,7 +13,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
 import yaml
@@ -272,6 +273,10 @@ def private_values(path: Path, *, environment: bool = False) -> dict[str, str]:
                 "QUALITY_EFFECTIVE_UID",
                 "QUALITY_EFFECTIVE_GID",
                 "QUALITY_INCUS_PROJECT",
+                "QUALITY_INCUS_RUNTIME_SCHEMA",
+                "MOLECULE_INCUS_TRANSPORT",
+                "MOLECULE_INCUS_REMOTE",
+                "MOLECULE_INCUS_PROJECT",
                 "MOLECULE_ANSIBLE_ARGS_STRICT_MODE",
             } or key.startswith("QUALITY_INPUT_"):
                 allowed = None
@@ -483,12 +488,20 @@ def validate_transport(
         "project",
         "expires_at",
     }
-    if (
-        set(binding) != keys
-        or type(binding["schema"]) is not int
-        or binding["schema"] != 1
-    ):
+    schema = binding.get("schema") if isinstance(binding, dict) else None
+    if (type(schema) is not int or schema not in (1, 2)
+            or set(binding) != keys | ({"runtime", "admission"} if schema == 2 else set())):
         raise ValueError("approved Incus binding shape differs")
+    if schema == 2:
+        runtime = binding["runtime"]
+        if (not isinstance(runtime, dict) or set(runtime) != {"firewall_controller", "bridge", "storage_pool"}
+                or runtime["firewall_controller"] != "incus"
+                or not isinstance(runtime["bridge"], dict)
+                or not isinstance(runtime["storage_pool"], str)
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,62}", runtime["storage_pool"])
+                or not isinstance(binding["admission"], str) or len(binding["admission"]) > 16384
+                or not re.fullmatch(r"[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", binding["admission"])):
+            raise ValueError("approved Incus runtime binding differs")
     for key, variable in (
         ("repository", "GITHUB_REPOSITORY"),
         ("run_id", "GITHUB_RUN_ID"),
@@ -557,6 +570,100 @@ def validate_transport(
         if not 0 < (config_root / name).stat().st_size <= 65536:
             raise ValueError("approved Incus TLS material is missing or oversized")
     return binding["project"]
+
+
+def transport_environment(environment: dict[str, str], config_root: Path) -> dict[str, str]:
+    """Derive transport selection only from the already verified private mount.
+
+    Schema2 is the Root runtime publication. Its admission signature and native
+    ownership are verified upstream by the Root issuer before engine execution;
+    this reader is not an independent signature verifier or operating grant.
+    The Source TLS helper still checks all runtime facts against the live server.
+    """
+    derived = ("QUALITY_INCUS_RUNTIME_SCHEMA", "MOLECULE_INCUS_TRANSPORT",
+               "MOLECULE_INCUS_REMOTE", "MOLECULE_INCUS_PROJECT")
+    if any(environment.get(key) for key in derived):
+        raise ValueError("caller cannot select the admitted Incus runtime transport")
+    project = validate_transport(environment, config_root)
+    binding = json.loads((config_root / "binding.json").read_text())
+    values = {"QUALITY_INCUS_PROJECT": project}
+    if binding["schema"] == 2:
+        values.update({"QUALITY_INCUS_RUNTIME_SCHEMA": "2", "MOLECULE_INCUS_TRANSPORT": "tls",
+                       "MOLECULE_INCUS_REMOTE": "quality", "MOLECULE_INCUS_PROJECT": project})
+    return values
+
+
+def source_snapshot(path: Path, expected_sha: str) -> dict[str, dict]:
+    """Read the fixed Root-derived archive inventory, not a job assertion.
+
+    Its bytes and Source tree are sealed in the Root engine descriptor after
+    independent GitHub commit/tree/blob acquisition. This reader alone grants
+    no authenticity to an arbitrary file outside that admitted mount contract.
+    """
+    if path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size <= 4*1024*1024:
+        raise ValueError("Root Source provenance is missing or oversized")
+    value = json.loads(path.read_bytes())
+    if (not isinstance(value, dict) or set(value) != {
+            "schema", "repository", "repository_id", "commit_sha", "tree_sha", "files"}
+            or type(value["schema"]) is not int or value["schema"] != 1
+            or value["repository"] != "ltn-it/ansible-collection-supplementary"
+            or type(value["repository_id"]) is not int or value["repository_id"] != 1103407173
+            or not re.fullmatch(r"[0-9a-f]{40}", expected_sha)
+            or value["commit_sha"] != expected_sha
+            or not isinstance(value["tree_sha"], str) or not re.fullmatch(r"[0-9a-f]{40}", value["tree_sha"])
+            or not isinstance(value["files"], list) or not 0 < len(value["files"]) <= 20000):
+        raise ValueError("Root Source provenance differs from the exact candidate")
+    entries = {}
+    for row in value["files"]:
+        if not isinstance(row, dict) or set(row) != {"path", "mode", "oid", "size"}:
+            raise ValueError("invalid Root Source inventory entry")
+        name = row["path"]
+        if (not isinstance(name, str) or not 0 < len(name) <= 4096 or name in (".", "..")
+                or any(ord(c) < 32 or ord(c) == 127 for c in name)
+                or PurePosixPath(name).is_absolute() or str(PurePosixPath(name)) != name
+                or any(part in (".", "..", ".git") for part in PurePosixPath(name).parts)
+                or name in entries or row["mode"] not in ("100644", "100755")
+                or type(row["size"]) is not int or not 0 <= row["size"] <= 512*1024*1024
+                or not isinstance(row["oid"], str) or not re.fullmatch(r"[0-9a-f]{40}", row["oid"])):
+            raise ValueError("invalid Root Source inventory identity")
+        entries[name] = row
+    return entries
+
+
+def snapshot_blob(workspace: Path, entries: dict[str, dict], relative: str) -> bytes:
+    if relative not in entries:
+        raise ValueError("test input is absent from the exact Source snapshot")
+    row = entries[relative]
+    path = workspace / relative
+    info = path.lstat()
+    if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_mode & 0o7000
+            or bool(info.st_mode & 0o111) != (row["mode"] == "100755") or info.st_size != row["size"]):
+        raise ValueError("Source snapshot file type, mode or size differs")
+    raw = path.read_bytes()
+    oid = hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest()
+    if oid != row["oid"]:
+        raise ValueError("Source snapshot Git blob differs")
+    return raw
+
+
+def verify_source_snapshot(workspace: Path, path: Path, expected_sha: str) -> None:
+    entries = source_snapshot(path, expected_sha)
+    files, directories = set(), set()
+    expected_directories = {str(parent) for name in entries for parent in PurePosixPath(name).parents
+                            if parent != PurePosixPath(".")}
+    for root, children, leaves in os.walk(workspace, followlinks=False):
+        for name in children:
+            child = Path(root) / name
+            if child.is_symlink():
+                raise ValueError("Source snapshot contains a linked directory")
+            directories.add(child.relative_to(workspace).as_posix())
+        files.update((Path(root)/name).relative_to(workspace).as_posix() for name in leaves)
+    if files != set(entries) or directories != expected_directories:
+        raise ValueError("Source snapshot has missing or untracked paths")
+    if sum(row["size"] for row in entries.values()) > 2*1024*1024*1024:
+        raise ValueError("Source snapshot exceeds the complete input budget")
+    for name in entries:
+        snapshot_blob(workspace, entries, name)
 
 
 def prepare_molecule_phase(phase: str, directory: Path) -> None:
@@ -652,29 +759,22 @@ def main() -> int:
     ):
         if shutil.which(command) is None:
             raise ValueError(f"required managed Devtools command is absent: {command}")
-    environment["QUALITY_INCUS_PROJECT"] = validate_transport(environment, Path("/incus"))
+    environment.update(transport_environment(environment, Path("/incus")))
     inputs = {
         name: environment[f"QUALITY_INPUT_{name.upper().replace('-', '_')}"]
         for name in INPUTS
     }
     if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", inputs["source-sha"]):
         raise ValueError("quality source SHA is invalid")
-    head = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd="/workspace",
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    clean = subprocess.run(
-        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
-        cwd="/workspace",
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    if head.stdout.strip() != inputs["source-sha"] or clean.stdout:
-        raise ValueError("quality source is not the clean exact reviewed revision")
+    if environment.get("QUALITY_INCUS_RUNTIME_SCHEMA") == "2":
+        verify_source_snapshot(Path("/workspace"), Path("/candidate/source-provenance.json"), inputs["source-sha"])
+    else:
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd="/workspace",
+                              capture_output=True, text=True, check=True)
+        clean = subprocess.run(["git", "status", "--porcelain=v1", "--untracked-files=all"], cwd="/workspace",
+                               capture_output=True, text=True, check=True)
+        if head.stdout.strip() != inputs["source-sha"] or clean.stdout:
+            raise ValueError("quality source is not the clean exact reviewed revision")
     steps = yaml.safe_load(Path("/controller/profile-steps.yml").read_text())["steps"]
     # Command files contain generated secrets; keep them in the isolated home
     # tmpfs, never in the host-mounted evidence or output directory.

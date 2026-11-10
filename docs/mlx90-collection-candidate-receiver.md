@@ -103,7 +103,7 @@ JUnit/Allure and strict evidence gates. Signing requires every prior native job
 to have completed successfully in the same run/attempt, including actual Heavy
 and Application Acceptance cells. Missing, failed, skipped, duplicate or
 foreign-attempt results cannot authorize a receipt. There is no no-op fallback.
-Only the protected main workflow receives the signing OIDC permission.
+The receipt signer uses OIDC for signing. Only the delegated Heavy/Application jobs additionally receive OIDC for the installed Root runtime authentication; hosted input validation does not.
 
 Local validation stays deterministic in read-only pinned Devtools. Protected
 runtime readback explicitly enables network and workspace output; receipt
@@ -227,3 +227,114 @@ artifact output; unconfirmed capture or destruction preserves private recovery
 state through container exit. Runner-loss recovery still requires the established
 ownership-aware stale-resource collector; a container lifetime is not proof of
 cleanup after runner loss.
+
+## Isolated Heavy worker routing candidate
+
+The separate reusable `collection-quality-profile-isolated.yml` admits only the
+Validation Main candidate receiver, its native release App actor and original
+triggering actor, `workflow_dispatch`, and attempt one. PRs, fork repositories,
+other workflows, branch substitutions and human reruns fail in hosted validation
+before any self-hosted worker is scheduled. The complete admission contract
+is compiled by the immutable `admit-incus-profile` action inside digest-pinned
+Devtools on the hosted runner, offline and read-only. Only the action's own
+public compiler directory is mounted; no candidate checkout, credentials or
+service socket is used. The action rejects unknown JSON fields/axes and malformed
+cell values before publishing a canonical include-only matrix. The callee's
+strategy consumes only this output, never raw matrix input. The existing reusable Collection
+workflow is unchanged and grants no alternative route into the isolated group.
+
+The isolated job selects only `lit-pis-prd-isolated` with the fixed host and
+isolation labels, including `ciwkr01`. The GitHub Runner service remains on that
+existing physical host. Heavy and Application Acceptance create their disposable
+Incus test VMs on the same host through `lit.ubuntu.incus_instance`; no additional
+machine or VM-hosted GitHub Runner is required. Matrix runner labels cannot
+change that selection. Native admission must still bind the actual assigned job
+to the selected physical Runner service; routing labels alone do not do so. The
+fixed `heavy-isolated-pilot` environment is a required configuration reference,
+not a claim of existing configuration. The path references no production secret
+or repository reader credential. Hosted validation retains only `contents: read`.
+The physical test job receives `contents: read`, `actions: read` and `id-token:
+write` for the exact job API/OIDC proof to the installed Root runtime. Its
+caller jobs explicitly grant the same permissions; no production secrets are
+inherited.
+
+The receiver delegates Heavy and then Application Acceptance to immutable
+workflow commit `70c47dbfce6ce12990e037e5be7c2c70d11e4cdf`. Hosted callee input
+validation alone cannot satisfy the receipt: native test-cell jobs are required.
+This is a local candidate pin containing the physical-runner routing correction.
+It still requires complete integration and normal protected publication before
+it can become the actual Main runtime contract.
+
+Management preparation must grant the isolated reusable workflow at the same
+immutable protected-source commit called by Main. The workflow bytes must match
+the reviewed admission hash; an older workflow is not sufficient. Main request,
+producer-run and signed-receipt checks remain separate, unchanged boundaries.
+The dedicated workflow contains no skipped legacy branch, so it preserves the
+receiver's requirement that every prior native job succeeds before signing.
+
+Each matrix is serial. The trusted controller must additionally reserve the
+selected existing physical Runner and serialize shared Incus capacity across
+runs. It must validate native service/job assignment and test-VM ownership,
+apply scoped access/egress policy, retain diagnostics and destroy only owned
+test resources. Preserve the physical Runner registration and foreign services.
+An independent collector must cover runner loss. Local pilot cleanup alarms use
+`root@localhost`; full Atlas/personal notification delivery is deferred and is
+not a prerequisite for this pilot. Routing labels do not prove global capacity,
+VM ownership, cleanup or operating acceptance. The existing VM-input
+qualification hold also remains in effect.
+
+
+### Typed image provenance
+
+Controller dependency capture resolves the requested image alias using the
+bound instance type (`--vm` for VMs, no flag for containers), matching Source
+initialization. It records reference, type and the immutable fingerprint.
+Owned-instance evidence independently reads `volatile.base_image`; native VM
+start, agent readiness and functional checks remain required. The Root-selected
+controller archive is separately sealed from the unchanged runtime-action pin.
+
+### Installed physical runtime adapter candidate
+
+The isolated callee invokes the immutable `run-incus-runtime-profile` action.
+It does not check out or execute the candidate on the persistent host and does
+not download candidate artifacts into its workspace. The trusted Root registry
+and native intake must bind the exact run, candidate/source, controller, image,
+resources and custody before the job is admitted. A profile/scenario/target
+locator selects that prepared policy and grants no authority by itself. The
+action also supplies the expected matrix/source metadata to verify the returned
+evidence; those values are not an engine or infrastructure request to Root.
+
+The action checks the installed `/usr/libexec/lightning-it/incus-runtime-client`
+and calls its fixed `run-profile` entry. The client authenticates with the
+Root-owned local socket using the short-lived job token and a challenge-bound
+OIDC token. It never forwards these tokens to the test EE. The Root service owns
+the pinned EE and the same-host Incus test-VM lifecycle. Only the client's full
+sanitized evidence outputs reach the artifact upload step; execution, cleanup
+and upload must all succeed before the profile can pass. Failed diagnostics can
+upload without changing a failed or cancelled result.
+
+Inside the EE, the controller accepts the Root-published schema2 transport
+binding, including its runtime facts and upstream admission. Transport mode,
+remote and project are derived from that private mount, never from job inputs
+or step command files. The Source TLS helper then checks the same runtime facts
+and live remote capacity before candidate installation. The VM route does not
+run host-wide stale-resource pruning or use the tooling container's memory and
+disk as evidence of test-host capacity. Every Molecule phase receives the same
+scoped TLS target. Legacy schema1/container dispatch retains its VM rejection;
+these changes do not qualify an unadmitted VM or activate a host.
+
+The Root factory verifies the GitHub commit/tree and every archive blob before
+sealing the Source mount. GitHub archives contain no `.git` checkout. For this
+schema2 route, Root therefore derives `source-provenance.json` in the read-only
+candidate mount, bound by the engine descriptor. The controller checks the exact
+Source repository/commit, complete file and directory inventory, executable
+modes, sizes and Git blob IDs against that record. Scenario/registry evidence
+uses those same verified bytes. No synthetic Git commit, checkout or successful
+Git status is created. Legacy checkout execution retains its Git checks. The
+derived record is not a job-supplied proof or an independent admission grant.
+
+This remains a private integration candidate. The native Root registry/intake,
+physical Runner migration, engine, TLS/custody, VM lifecycle and complete
+acceptance are still required. The new action commit and callee/Main/Management
+pins must all be published through the normal coordinated path after the whole
+local Story passes. A passing adapter test is not a Heavy result.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -70,6 +71,23 @@ class QualityConnectionContractTests(unittest.TestCase):
                         self.assertEqual(phase, argv[5])
                         values = json.loads((private / "incus-vars.json").read_bytes())
                         self.assertEqual({"ansible_incus_remote": "quality", "ansible_incus_project": "bound-test-project"}, values)
+
+    def test_archive_without_git_metadata_reaches_actual_molecule_configuration(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.fixture(root)
+            shutil.rmtree(root/".git")
+            private = root/"private"
+            private.mkdir(mode=0o700)
+            result = subprocess.run(
+                ["python3", str(ACTION/"run-cell.py"), "--molecule-phase", "test", str(private)],
+                cwd=root, env={**os.environ, "QUALITY_SCENARIO": "fixture",
+                               "QUALITY_INCUS_PROJECT": "bound-test-project"},
+                capture_output=True, text=True, check=False)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual({"ansible_incus_remote": "quality", "ansible_incus_project": "bound-test-project"},
+                             json.loads((private/"incus-vars.json").read_bytes()))
+            self.assertFalse((root/".git").exists())
 
     def test_every_phase_supplies_private_vars_to_real_incus_connection_builder(self):
         with tempfile.TemporaryDirectory() as directory:

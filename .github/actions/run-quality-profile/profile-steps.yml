@@ -120,29 +120,43 @@ steps:
     run: |
       set -euo pipefail
 
-      # Defense in depth for this phase: the native adapter rejects VM inputs
-      # before downloading a candidate. Never infer lifecycle support from qemu.
-      if [ "${KEYCLOAK_TEST_INSTANCE_TYPE:-}" != "container" ]; then
-        echo "VM or unknown inputs require a qualified remote-aware producer lifecycle" >&2
-        exit 1
-      fi
-
       command -v ansible-galaxy
       command -v incus
       command -v molecule
       command -v openssl
       command -v python3
 
-      python3 scripts/prune_stale_incus_resources.py \
-        --repository "$GITHUB_REPOSITORY" \
-        --current-run-id "$GITHUB_RUN_ID"
-
-      incus version
-
-      available_kib="$(df -Pk "$RUNNER_TEMP" | awk 'NR == 2 {print $4}')"
-      memory_kib="$(awk '/MemAvailable/ {print $2}' /proc/meminfo)"
-      test "$available_kib" -ge 10485760
-      test "$memory_kib" -ge 4194304
+      if [ "${QUALITY_INCUS_RUNTIME_SCHEMA:-}" = 2 ]; then
+        # The Root runtime has already admitted this single VM lease. Recheck
+        # the exact Source TLS path and live remote capacity before installation.
+        # Never prune the host or mistake this tooling container for its VM host.
+        test "${KEYCLOAK_TEST_INSTANCE_TYPE:-}" = vm
+        test "${MOLECULE_INCUS_TRANSPORT:-}" = tls
+        test "${MOLECULE_INCUS_REMOTE:-}" = quality
+        test "${MOLECULE_INCUS_PROJECT:-}" = "$QUALITY_INCUS_PROJECT"
+        python3 molecule/shared/incus/helpers/tls_transport.py \
+          --repository "$GITHUB_REPOSITORY" \
+          --run-id "$GITHUB_RUN_ID" \
+          --attempt "$GITHUB_RUN_ATTEMPT" \
+          --owner "$MOLECULE_TEST_OWNER" \
+          --platforms "$(printf '[[\"%s\",\"vm\"]]' "$KEYCLOAK_TEST_INSTANCE")" \
+          --capacity
+      else
+        # The legacy adapter remains container-only. A qemu driver string or
+        # caller environment flag cannot qualify its VM lifecycle.
+        if [ "${KEYCLOAK_TEST_INSTANCE_TYPE:-}" != container ]; then
+          echo "VM or unknown inputs require a qualified remote-aware producer lifecycle" >&2
+          exit 1
+        fi
+        python3 scripts/prune_stale_incus_resources.py \
+          --repository "$GITHUB_REPOSITORY" \
+          --current-run-id "$GITHUB_RUN_ID"
+        incus version
+        available_kib="$(df -Pk "$RUNNER_TEMP" | awk 'NR == 2 {print $4}')"
+        memory_kib="$(awk '/MemAvailable/ {print $2}' /proc/meminfo)"
+        test "$available_kib" -ge 10485760
+        test "$memory_kib" -ge 4194304
+      fi
       checksum_file="${QUALITY_CANDIDATE_ROOT}/candidate-SHA256SUMS"
       test -s "$checksum_file"
       (
@@ -266,6 +280,14 @@ steps:
     run: |
       set -euo pipefail
 
+      # The same alias can resolve to different VM and container images.
+      # Match the type already bound by the Root cell and Source initializer.
+      case "${KEYCLOAK_TEST_INSTANCE_TYPE:-}" in
+        vm) incus_image_type_args=(--vm) ;;
+        container) incus_image_type_args=() ;;
+        *) echo "Unsupported inventory instance type" >&2; exit 1 ;;
+      esac
+
       dependency_root="$QUALITY_ARTIFACT_ROOT/dependencies"
       configuration_root="$QUALITY_ARTIFACT_ROOT/configuration"
       mkdir -p "$dependency_root" "$configuration_root"
@@ -278,7 +300,7 @@ steps:
         > "$dependency_root/collection-dependencies.json"
       incus version > "$dependency_root/incus-version.txt"
       incus_image_fingerprint="$(
-        incus image info "$KEYCLOAK_TEST_IMAGE" |
+        incus image info "$KEYCLOAK_TEST_IMAGE" "${incus_image_type_args[@]}" |
           awk -F ': ' '$1 == "Fingerprint" { fingerprint = $2 } END { print fingerprint }'
       )"
       test "${#incus_image_fingerprint}" -eq 64
@@ -295,6 +317,7 @@ steps:
               {
                   "fingerprint": os.environ["INCUS_IMAGE_FINGERPRINT"],
                   "reference": os.environ["KEYCLOAK_TEST_IMAGE"],
+                  "instance_type": os.environ["KEYCLOAK_TEST_INSTANCE_TYPE"],
               },
               sort_keys=True,
           )
@@ -412,6 +435,11 @@ steps:
       source_sha = os.environ["QUALITY_SOURCE_SHA"]
 
       def exact_source(path):
+          if os.environ.get("QUALITY_INCUS_RUNTIME_SCHEMA") == "2":
+              import runpy
+              controller = runpy.run_path("/controller/run-cell.py", run_name="quality_source_reader")
+              entries = controller["source_snapshot"](Path("/candidate/source-provenance.json"), source_sha)
+              return controller["snapshot_blob"](Path("."), entries, path.as_posix())
           result = subprocess.run(
               ["git", "show", f"{source_sha}:{path.as_posix()}"],
               check=False,
