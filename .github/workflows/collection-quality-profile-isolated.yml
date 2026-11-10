@@ -52,101 +52,20 @@ jobs:
     timeout-minutes: 10
     outputs:
       profile: ${{ steps.contract.outputs.profile }}
+      matrix-json: ${{ steps.contract.outputs.matrix-json }}
     steps:
       - id: contract
-        name: Validate profile and exact candidate identity
-        env:
-          PROFILE: ${{ inputs.profile }}
-          MATRIX_JSON: ${{ inputs['matrix-json'] }}
-          CALLER_REPOSITORY: ${{ github.repository }}
-          SOURCE_REPOSITORY: ${{ inputs['source-repository'] || github.repository }}
-          SOURCE_SHA: ${{ inputs['source-sha'] }}
-          CALLER_REPOSITORY_ID: ${{ github.repository_id }}
-          CALLER_EVENT: ${{ github.event_name }}
-          CALLER_REF: ${{ github.ref }}
-          CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
-          CALLER_ACTOR: ${{ github.actor }}
-          CALLER_ACTOR_ID: ${{ github.actor_id }}
-          CALLER_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-          CALLER_ATTEMPT: ${{ github.run_attempt }}
-        run: |
-          set -euo pipefail
-          # Hosted admission finishes before any physical worker is scheduled.
-          # Only public inputs enter this offline image; no checkout, token or mount.
-          docker run --rm --interactive --entrypoint "" --read-only --network none \
-            --user 1000:1000 --cap-drop ALL --security-opt no-new-privileges=true \
-            --pids-limit 128 --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
-            -e PROFILE -e MATRIX_JSON -e CALLER_REPOSITORY \
-            -e SOURCE_REPOSITORY -e SOURCE_SHA -e CALLER_REPOSITORY_ID \
-            -e CALLER_EVENT -e CALLER_REF -e CALLER_WORKFLOW_REF \
-            -e CALLER_ACTOR -e CALLER_ACTOR_ID -e CALLER_TRIGGERING_ACTOR \
-            -e CALLER_ATTEMPT \
-            quay.io/l-it/ee-wunder-devtools-ubi9:v1.18.2@sha256:58955457d3410706520f34fa7ea9823d5650aa4844c562cd5c0107024d825711 \
-            bash -euo pipefail -s >> "$GITHUB_OUTPUT" <<'CONTRACT'
-          set -euo pipefail
-          test "$CALLER_REPOSITORY" = ltn-it/modulix-validation
-          test "$CALLER_REPOSITORY_ID" = 1269461997
-          test "$CALLER_EVENT" = workflow_dispatch
-          test "$CALLER_REF" = refs/heads/main
-          test "$CALLER_WORKFLOW_REF" = ltn-it/modulix-validation/.github/workflows/mlx90-collection-candidate-validation.yml@refs/heads/main
-          test "$CALLER_ACTOR" = 'lightning-it-release-automation[bot]'
-          test "$CALLER_ACTOR_ID" = 307565056
-          test "$CALLER_TRIGGERING_ACTOR" = "$CALLER_ACTOR"
-          test "$CALLER_ATTEMPT" = 1
-          test "$SOURCE_REPOSITORY" = ltn-it/ansible-collection-supplementary
-          case "$PROFILE" in
-            heavy|application_acceptance) ;;
-            *) echo "unsupported delegated profile: $PROFILE" >&2; exit 1 ;;
-          esac
-          [[ "$CALLER_REPOSITORY" =~ ^ltn-it/[A-Za-z0-9_.-]+$ ]] || {
-            echo "workflow caller is not allowlisted" >&2
-            exit 1
-          }
-          [[ "$SOURCE_REPOSITORY" =~ ^ltn-it/[A-Za-z0-9_.-]+$ ]] || {
-            echo "source-repository is not allowlisted" >&2
-            exit 1
-          }
-          if [[ ! "$SOURCE_SHA" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]]; then
-            echo "source-sha must be an exact 40- or 64-character lowercase hexadecimal commit ID" >&2
-            exit 1
-          fi
-          python3 - <<'PY'
-          import json
-          import os
-
-          value = json.loads(os.environ["MATRIX_JSON"])
-          cells = value.get("include") if isinstance(value, dict) else None
-          if not isinstance(cells, list) or not cells:
-              raise SystemExit("matrix-json must contain a non-empty include list")
-          required = {
-              "allure",
-              "component",
-              "instance_type",
-              "junit",
-              "roles",
-              "runner",
-              "scenario",
-              "target",
-          }
-          for index, cell in enumerate(cells):
-              if not isinstance(cell, dict):
-                  raise SystemExit(f"matrix-json include[{index}] must be an object")
-              missing = sorted(required - cell.keys())
-              if missing:
-                  raise SystemExit(f"matrix-json include[{index}] is missing: {', '.join(missing)}")
-              if not isinstance(cell["runner"], (str, list)) or not cell["runner"]:
-                  raise SystemExit(f"matrix-json include[{index}].runner must be non-empty")
-              if not isinstance(cell["roles"], list) or not cell["roles"]:
-                  raise SystemExit(f"matrix-json include[{index}].roles must be a non-empty list")
-              for key in ("component", "scenario", "target", "instance_type"):
-                  if not isinstance(cell[key], str) or not cell[key]:
-                      raise SystemExit(f"matrix-json include[{index}].{key} must be a non-empty string")
-              for key in ("junit", "allure"):
-                  if not isinstance(cell[key], bool):
-                      raise SystemExit(f"matrix-json include[{index}].{key} must be a boolean")
-          PY
-          echo "profile=$PROFILE"
-          CONTRACT
+        name: Compile canonical protected profile admission
+        uses: ltn-it/modulix-validation/.github/actions/admit-incus-profile@b3cba6b39c3dccf344af5868f6281266d0f8f74d
+        with:
+          profile: ${{ inputs.profile }}
+          matrix-json: ${{ inputs['matrix-json'] }}
+          source-sha: ${{ inputs['source-sha'] }}
+          source-repository: ${{ inputs['source-repository'] || github.repository }}
+          candidate-artifact: ${{ inputs['candidate-artifact'] }}
+          cpu-limit: ${{ inputs['cpu-limit'] }}
+          memory-limit: ${{ inputs['memory-limit'] }}
+          disk-limit: ${{ inputs['disk-limit'] }}
 
   profile-cells:
     name: ${{ inputs.profile }} / ${{ matrix.scenario }} / ${{ matrix.target }}
@@ -154,7 +73,7 @@ jobs:
     strategy:
       fail-fast: false
       max-parallel: 1
-      matrix: ${{ fromJSON(inputs['matrix-json']) }}
+      matrix: ${{ fromJSON(needs.validate-inputs.outputs.matrix-json) }}
     runs-on:
       group: lit-pis-prd-isolated
       labels:
@@ -189,7 +108,7 @@ jobs:
           profile: ${{ needs.validate-inputs.outputs.profile }}
           scenario: ${{ matrix.scenario }}
           target: ${{ matrix.target }}
-          target-disposition: ${{ matrix.target_disposition || 'supported' }}
+          target-disposition: ${{ matrix.target_disposition }}
           roles: ${{ join(matrix.roles, ',') }}
           image: ${{ matrix.image || vars[matrix.image_variable] }}
           instance-type: ${{ matrix.instance_type }}

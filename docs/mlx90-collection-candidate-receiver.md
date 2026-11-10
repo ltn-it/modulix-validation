@@ -235,9 +235,12 @@ Validation Main candidate receiver, its native release App actor and original
 triggering actor, `workflow_dispatch`, and attempt one. PRs, fork repositories,
 other workflows, branch substitutions and human reruns fail in hosted validation
 before any self-hosted worker is scheduled. The complete admission contract
-runs inside the digest-pinned Devtools image on the hosted runner, offline,
-read-only and without checkout, mounts or credentials. The host only dispatches
-the container and appends its successful profile output. The existing reusable Collection
+is compiled by the immutable `admit-incus-profile` action inside digest-pinned
+Devtools on the hosted runner, offline and read-only. Only the action's own
+public compiler directory is mounted; no candidate checkout, credentials or
+service socket is used. The action rejects unknown JSON fields/axes and malformed
+cell values before publishing a canonical include-only matrix. The callee's
+strategy consumes only this output, never raw matrix input. The existing reusable Collection
 workflow is unchanged and grants no alternative route into the isolated group.
 
 The isolated job selects only `lit-pis-prd-isolated` with the fixed host and
