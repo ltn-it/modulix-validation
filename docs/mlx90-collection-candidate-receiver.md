@@ -284,6 +284,15 @@ VM ownership, cleanup or operating acceptance. The existing VM-input
 qualification hold also remains in effect.
 
 
+### Typed image provenance
+
+Controller dependency capture resolves the requested image alias using the
+bound instance type (`--vm` for VMs, no flag for containers), matching Source
+initialization. It records reference, type and the immutable fingerprint.
+Owned-instance evidence independently reads `volatile.base_image`; native VM
+start, agent readiness and functional checks remain required. The Root-selected
+controller archive is separately sealed from the unchanged runtime-action pin.
+
 ### Installed physical runtime adapter candidate
 
 The isolated callee invokes the immutable `run-incus-runtime-profile` action.

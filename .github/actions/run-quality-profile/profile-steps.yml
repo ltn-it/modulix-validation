@@ -280,6 +280,14 @@ steps:
     run: |
       set -euo pipefail
 
+      # The same alias can resolve to different VM and container images.
+      # Match the type already bound by the Root cell and Source initializer.
+      case "${KEYCLOAK_TEST_INSTANCE_TYPE:-}" in
+        vm) incus_image_type_args=(--vm) ;;
+        container) incus_image_type_args=() ;;
+        *) echo "Unsupported inventory instance type" >&2; exit 1 ;;
+      esac
+
       dependency_root="$QUALITY_ARTIFACT_ROOT/dependencies"
       configuration_root="$QUALITY_ARTIFACT_ROOT/configuration"
       mkdir -p "$dependency_root" "$configuration_root"
@@ -292,7 +300,7 @@ steps:
         > "$dependency_root/collection-dependencies.json"
       incus version > "$dependency_root/incus-version.txt"
       incus_image_fingerprint="$(
-        incus image info "$KEYCLOAK_TEST_IMAGE" |
+        incus image info "$KEYCLOAK_TEST_IMAGE" "${incus_image_type_args[@]}" |
           awk -F ': ' '$1 == "Fingerprint" { fingerprint = $2 } END { print fingerprint }'
       )"
       test "${#incus_image_fingerprint}" -eq 64
@@ -309,6 +317,7 @@ steps:
               {
                   "fingerprint": os.environ["INCUS_IMAGE_FINGERPRINT"],
                   "reference": os.environ["KEYCLOAK_TEST_IMAGE"],
+                  "instance_type": os.environ["KEYCLOAK_TEST_INSTANCE_TYPE"],
               },
               sort_keys=True,
           )
