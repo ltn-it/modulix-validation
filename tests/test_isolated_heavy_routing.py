@@ -1,8 +1,10 @@
 """Native caller rejection before restricted worker scheduling; no infrastructure mocks."""
 from pathlib import Path
+import ast
 import json
 import os
 import subprocess
+import tempfile
 import unittest
 import yaml
 
@@ -13,7 +15,8 @@ WORKFLOW = ROOT / ".github/workflows/collection-quality-profile-isolated.yml"
 class IsolatedHeavyRoutingTests(unittest.TestCase):
     def setUp(self):
         self.workflow = yaml.safe_load(WORKFLOW.read_text())
-        self.contract = self.workflow["jobs"]["validate-inputs"]["steps"][0]["run"]
+        self.launcher = self.workflow["jobs"]["validate-inputs"]["steps"][0]["run"]
+        self.contract = self.launcher.split("<<'CONTRACT'\n", 1)[1].removesuffix("CONTRACT\n")
         self.environment = {
             "PATH": os.environ["PATH"], "PROFILE": "heavy", "MATRIX_JSON": json.dumps({"include": [{
                 "allure": True, "component": "fixture", "instance_type": "container", "junit": True,
@@ -33,6 +36,49 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
         environment = {**self.environment, **changes}
         return subprocess.run(["bash", "-c", self.contract], env=environment,
                               text=True, capture_output=True, timeout=10).returncode
+
+    def test_hosted_admission_uses_exact_central_pinned_offline_container(self):
+        # Observe the actual dispatcher argv without requiring an inner daemon.
+        # Semantic contract tests below execute within the outer pinned test EE.
+        tree = ast.parse((ROOT / "scripts/lit-push-ready.py").read_text())
+        image = next(ast.literal_eval(node.value) for node in tree.body
+                     if isinstance(node, ast.Assign)
+                     and any(isinstance(target, ast.Name) and target.id == "COPILOT_DEVTOOL_IMAGE"
+                             for target in node.targets))
+        forwarded = ["PROFILE", "MATRIX_JSON", "CALLER_REPOSITORY", "SOURCE_REPOSITORY", "SOURCE_SHA",
+                     "CALLER_REPOSITORY_ID", "CALLER_EVENT", "CALLER_REF", "CALLER_WORKFLOW_REF",
+                     "CALLER_ACTOR", "CALLER_ACTOR_ID", "CALLER_TRIGGERING_ACTOR", "CALLER_ATTEMPT"]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            environment = {**self.environment, "GITHUB_OUTPUT": str(root / "outputs"),
+                           "ADMISSION_ARGV": str(root / "argv"), "ADMISSION_STDIN": str(root / "stdin")}
+            harness = """
+docker() {
+    printf '%s\\n' "$@" > "$ADMISSION_ARGV"
+    cat > "$ADMISSION_STDIN"
+}
+export -f docker
+exec bash -c "$1"
+"""
+            result = subprocess.run(["bash", "-c", harness, "admission-test", self.launcher],
+                                    env=environment, text=True, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            expected = ["run", "--rm", "--interactive", "--entrypoint", "", "--read-only", "--network", "none",
+                        "--user", "1000:1000", "--cap-drop", "ALL", "--security-opt", "no-new-privileges=true",
+                        "--pids-limit", "128", "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m"]
+            for name in forwarded:
+                expected.extend(["-e", name])
+            expected.extend([image, "bash", "-euo", "pipefail", "-s"])
+            self.assertEqual((root / "argv").read_text().splitlines(), expected)
+            self.assertEqual((root / "stdin").read_text(), self.contract)
+        admission = self.workflow["jobs"]["validate-inputs"]
+        self.assertEqual(admission["runs-on"], "ubuntu-latest")
+        self.assertEqual(len(admission["steps"]), 1)
+        self.assertEqual(self.workflow["jobs"]["profile-cells"]["needs"], "validate-inputs")
+        # The host segment contains no language validator or checkout before admission.
+        host = self.launcher.split("<<'CONTRACT'\n", 1)[0]
+        self.assertNotIn("python", host)
+        self.assertNotIn("actions/checkout", str(admission))
 
     def test_actual_contract_admits_main_receiver_and_denies_untrusted_context(self):
         self.assertEqual(self.invoke(), 0)

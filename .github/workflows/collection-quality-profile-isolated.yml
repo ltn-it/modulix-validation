@@ -71,6 +71,19 @@ jobs:
           CALLER_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
+          # Hosted admission finishes before any physical worker is scheduled.
+          # Only public inputs enter this offline image; no checkout, token or mount.
+          docker run --rm --interactive --entrypoint "" --read-only --network none \
+            --user 1000:1000 --cap-drop ALL --security-opt no-new-privileges=true \
+            --pids-limit 128 --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
+            -e PROFILE -e MATRIX_JSON -e CALLER_REPOSITORY \
+            -e SOURCE_REPOSITORY -e SOURCE_SHA -e CALLER_REPOSITORY_ID \
+            -e CALLER_EVENT -e CALLER_REF -e CALLER_WORKFLOW_REF \
+            -e CALLER_ACTOR -e CALLER_ACTOR_ID -e CALLER_TRIGGERING_ACTOR \
+            -e CALLER_ATTEMPT \
+            quay.io/l-it/ee-wunder-devtools-ubi9:v1.18.2@sha256:58955457d3410706520f34fa7ea9823d5650aa4844c562cd5c0107024d825711 \
+            bash -euo pipefail -s >> "$GITHUB_OUTPUT" <<'CONTRACT'
+          set -euo pipefail
           test "$CALLER_REPOSITORY" = ltn-it/modulix-validation
           test "$CALLER_REPOSITORY_ID" = 1269461997
           test "$CALLER_EVENT" = workflow_dispatch
@@ -132,7 +145,8 @@ jobs:
                   if not isinstance(cell[key], bool):
                       raise SystemExit(f"matrix-json include[{index}].{key} must be a boolean")
           PY
-          echo "profile=$PROFILE" >> "$GITHUB_OUTPUT"
+          echo "profile=$PROFILE"
+          CONTRACT
 
   profile-cells:
     name: ${{ inputs.profile }} / ${{ matrix.scenario }} / ${{ matrix.target }}
