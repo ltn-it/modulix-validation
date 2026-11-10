@@ -33,6 +33,9 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
                          "ltn-it/modulix-validation/.github/actions/admit-incus-profile@b3cba6b39c3dccf344af5868f6281266d0f8f74d")
         self.assertNotIn("run", step)
         self.assertNotIn("env", step)
+        action = yaml.safe_load((ROOT / ".github/actions/admit-incus-profile/action.yml").read_text())
+        self.assertEqual(set(step["with"]), set(action["inputs"]))
+        self.assertEqual(step["with"]["matrix-json"], "${{ inputs['matrix-json'] }}")
         self.assertEqual(admission["outputs"]["matrix-json"], "${{ steps.contract.outputs.matrix-json }}")
         isolated = self.workflow["jobs"]["profile-cells"]
         self.assertEqual(isolated["needs"], "validate-inputs")

@@ -259,7 +259,7 @@ caller jobs explicitly grant the same permissions; no production secrets are
 inherited.
 
 The receiver delegates Heavy and then Application Acceptance to immutable
-workflow commit `7cf9b848e9903c9f666b68b58d42bc31f46dff75`. Hosted callee input
+workflow commit `70c47dbfce6ce12990e037e5be7c2c70d11e4cdf`. Hosted callee input
 validation alone cannot satisfy the receipt: native test-cell jobs are required.
 This is a local candidate pin containing the physical-runner routing correction.
 It still requires complete integration and normal protected publication before
