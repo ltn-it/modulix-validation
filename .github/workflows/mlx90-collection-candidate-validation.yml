@@ -137,7 +137,7 @@ jobs:
       contents: read
       actions: read
       id-token: write
-    uses: ltn-it/modulix-validation/.github/workflows/collection-quality-profile-isolated.yml@d37d9716a71b5e7b5b45bd0ad68bfcbea8c412c2
+    uses: ltn-it/modulix-validation/.github/workflows/collection-quality-profile-isolated.yml@7cf9b848e9903c9f666b68b58d42bc31f46dff75
     with:
       profile: heavy
       matrix-json: ${{ needs.validate.outputs.heavy }}
@@ -155,7 +155,7 @@ jobs:
       contents: read
       actions: read
       id-token: write
-    uses: ltn-it/modulix-validation/.github/workflows/collection-quality-profile-isolated.yml@d37d9716a71b5e7b5b45bd0ad68bfcbea8c412c2
+    uses: ltn-it/modulix-validation/.github/workflows/collection-quality-profile-isolated.yml@7cf9b848e9903c9f666b68b58d42bc31f46dff75
     with:
       profile: application_acceptance
       matrix-json: ${{ needs.validate.outputs.acceptance }}
