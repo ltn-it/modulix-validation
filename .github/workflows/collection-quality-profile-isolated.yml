@@ -53,10 +53,11 @@ jobs:
     outputs:
       profile: ${{ steps.contract.outputs.profile }}
       matrix-json: ${{ steps.contract.outputs.matrix-json }}
+      worker-group: ${{ steps.contract.outputs.worker-group }}
     steps:
       - id: contract
         name: Compile canonical protected profile admission
-        uses: ltn-it/modulix-validation/.github/actions/admit-incus-profile@3fec83c07621cb84bf29d7f3b1fcf817f2fd2a5f
+        uses: ltn-it/modulix-validation/.github/actions/admit-incus-profile@68c940cc9d6c8751d986378e11f153e738930024
         with:
           profile: ${{ inputs.profile }}
           matrix-json: ${{ inputs['matrix-json'] }}
@@ -75,7 +76,7 @@ jobs:
       max-parallel: 1
       matrix: ${{ fromJSON(needs.validate-inputs.outputs.matrix-json) }}
     runs-on:
-      group: lit-pis-prd-isolated
+      group: ${{ needs.validate-inputs.outputs.worker-group }}
       labels:
         - self-hosted
         - linux
@@ -103,7 +104,7 @@ jobs:
       id-token: write
     steps:
       - name: Run prepared Incus cell through the installed host runtime
-        uses: ltn-it/modulix-validation/.github/actions/run-incus-runtime-profile@dd1b8859b30b5e40b1d166ee25c8e5e5f4113675
+        uses: ltn-it/modulix-validation/.github/actions/run-incus-runtime-profile@68c940cc9d6c8751d986378e11f153e738930024
         with:
           profile: ${{ needs.validate-inputs.outputs.profile }}
           scenario: ${{ matrix.scenario }}
@@ -119,3 +120,41 @@ jobs:
           cpu-limit: ${{ inputs['cpu-limit'] }}
           memory-limit: ${{ inputs['memory-limit'] }}
           disk-limit: ${{ inputs['disk-limit'] }}
+
+  profile-results:
+    name: Final quality / ${{ inputs.profile }} / ${{ matrix.scenario }} / ${{ matrix.target }}
+    needs: [validate-inputs, profile-cells]
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix: ${{ fromJSON(needs.validate-inputs.outputs.matrix-json) }}
+    runs-on:
+      group: ${{ needs.validate-inputs.outputs.worker-group }}
+      labels:
+        - self-hosted
+        - linux
+        - x64
+        - lit-pis
+        - prd
+        - isolated
+        - ciwkr01
+    environment:
+      name: heavy-isolated-pilot
+    timeout-minutes: 90
+    concurrency:
+      group: >-
+        modulix-validation-final-${{ github.repository_id }}-${{ github.run_id }}-${{
+        github.run_attempt }}-${{ inputs.profile }}-${{ matrix.scenario }}-${{
+        matrix.target }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - name: Observe the original cell only after its execution job ended
+        uses: ltn-it/modulix-validation/.github/actions/observe-incus-runtime-profile@68c940cc9d6c8751d986378e11f153e738930024
+        with:
+          profile: ${{ needs.validate-inputs.outputs.profile }}
+          scenario: ${{ matrix.scenario }}
+          target: ${{ matrix.target }}
