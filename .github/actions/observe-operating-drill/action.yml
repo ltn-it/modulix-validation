@@ -1,0 +1,42 @@
+---
+name: Observe actual post-job operating custody
+description: Read original case retention after its native execution job ended, without a new lease.
+inputs:
+  case:
+    required: true
+    description: Original closed operating case.
+runs:
+  using: composite
+  steps:
+    - name: Check the installed operating broker client
+      shell: bash
+      run: /usr/libexec/lightning-it/incus-runtime-client check
+    - name: Verify original case custody after actual native completion
+      id: operating
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        OPERATING_CASE: ${{ inputs.case }}
+      run: |
+        set -euo pipefail
+        exec /usr/libexec/lightning-it/incus-runtime-client observe-operating --case "$OPERATING_CASE"
+    - name: Publish actual retained-case metadata
+      id: upload
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+      with:
+        name: ${{ steps.operating.outputs.operating-artifact }}
+        path: ${{ steps.operating.outputs.operating-receipt }}
+        if-no-files-found: error
+        retention-days: 30
+    - name: Require verified retention and publication without quality PASS
+      if: always()
+      shell: bash
+      env:
+        OPERATING_OUTCOME: ${{ steps.operating.outcome }}
+        OPERATING_STATE: ${{ steps.operating.outputs.operating-state }}
+        UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+      run: |
+        set -euo pipefail
+        test "$OPERATING_OUTCOME" = success
+        test "$OPERATING_STATE" = retained
+        test "$UPLOAD_OUTCOME" = success

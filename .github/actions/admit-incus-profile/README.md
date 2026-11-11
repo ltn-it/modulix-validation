@@ -43,3 +43,19 @@ The compiler also derives `worker-group` from that fully validated caller:
 the original Validation domain retains `lit-pis-prd-isolated`, while direct
 Supplementary uses only `lit-pis-prd-supplementary-isolated`. A matrix label,
 environment variable or workflow input cannot choose a different group.
+
+The additional `operating` profile is not a business matrix. It requires the
+complete direct Source identity, the initial Main push whose `before` value is
+`90e7216b5d085ca4ac6238e44dcdbaa51e847d5f`, an empty include matrix, and exactly
+one of `failure`, `broker-cancel`, or `expiry-controller-loss`. Ordinary profiles
+reject a nonempty operating case, and the original receiver cannot enter this
+domain. Root independently verifies the actual Source commit's first parent;
+the caller condition alone grants no operating lease. Later ordinary Main
+deliveries do not repeat these four-hour negative cases.
+
+Operating resources are prepared by Root, outside the caller's business limits:
+one CPU, 2 GiB RAM, 5 GiB root and 500 MiB VM state within a 6 GiB VM budget.
+The exact cached 4 GiB Ubuntu image is journaled and copied into the owned
+project before execution; the complete project reserves 10 GiB. Actual physical
+and retained reservations still gate every case. The ordinary two business
+profiles remain at 4 CPU, 12 GiB RAM and 24 GiB disk.
