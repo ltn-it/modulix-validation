@@ -1,0 +1,340 @@
+# MLX-90 collection candidate receiver
+
+LI-359 owns the paired receiver for Supplementary's v2 validation request.
+The workflow `mlx90-collection-candidate-validation.yml` implements the paired
+request boundary, authenticated exact-byte Nexus readback, real supported
+Heavy/Application matrices and keyless v2 receipt signing. Its controller
+adapters are `scripts/collection_candidate_request.py` and
+`scripts/collection_candidate_receiver.py`. Code delivery and independent
+checks proceed under the owner's workflow-first decision. Runtime activation,
+Nexus/Galaxy cutover and operational acceptance remain later work under
+LI-371/LI-118; code presence is not an operational or release-eligible result.
+
+The modern device-free remote quality context currently admits containers only.
+VM inputs are rejected in the first action step, before candidate download,
+dispatcher effects, cleanup or installation. The current Collection producer's
+Heavy create playbook imports a shared lifecycle that requires readable and
+writable localhost `/dev/kvm`; remote qemu capability does not satisfy that
+contract. VM/Heavy acceptance remains open until a coordinated remote-aware
+producer lifecycle is qualified. No host device or privilege is forwarded, no
+VM silently becomes a container, and the standalone legacy supplier is unchanged.
+
+The request adapter validates canonical compact JSON and its SHA-256 before
+using request fields. It rejects duplicate keys, unexpected fields, boolean
+integer substitutions, unsafe names, foreign identities, human action counts,
+and a Nexus endpoint that differs from protected controller configuration.
+The independent producer-run check binds both App actors, exact source SHA,
+workflow, run and attempt; the producer must still be in progress while it
+waits for the receiver.
+
+## Confirmed infrastructure and remaining configuration
+
+On 2026-10-17, the existing Protected Incus runner group allowed this
+repository and contained five online Incus runners. The repository-level
+runner inventory alone omits those organization runners.
+
+The existing `mlx90-final-acceptance` environment already permits only `main`
+and has no required human reviewers. Reusing this environment needs no change
+to its protection rules. The separate collection runtime environments have
+human reviewers and must retain them.
+
+On 2026-10-17, the owner confirmed directly that Nexus has not yet been
+provisioned. There is consequently no existing service endpoint or reader
+configuration to discover. Foundation or host provisioning is outside LI-359.
+The upstream service must deliver the Nexus target before runtime acceptance;
+it does not block fail-closed workflow code delivery.
+
+Repository, organization, and all seven existing environment metadata lists
+contained no Nexus endpoint or reader credential configuration. No existing
+workflow references a Nexus reader. A runner-local credential or a separately
+approved external secret source has not been established by that inspection.
+An App token is not a Nexus reader credential.
+
+This is not evidence that the worker needs broader GitHub rights, nor proof
+that a service is unreachable. There is no confirmed endpoint to probe. The
+authoritative deployment record
+[Nexus PRD Target](https://lit.atlassian.net/wiki/spaces/LIT/pages/2897838457)
+(version 11) describes a planned target, without an installed or accepted
+service, FQDN, TLS, repository, or credential baseline. The
+[service project](https://lit.atlassian.net/wiki/spaces/LIT/pages/2897969321)
+(version 14) likewise keeps applicability, design, and installation open.
+The accepted
+[MLX-70 ADR](https://lit.atlassian.net/wiki/spaces/LIT/pages/2893119515)
+(version 7) explicitly keeps Nexus cutover and technical acceptance open.
+The smallest missing prerequisite is now the actual provisioned service,
+followed by its as-built repository reference and approved reader delivery
+mechanism. There is no further secret or endpoint search in this increment.
+Deploying a new service is outside this paired receiver increment.
+
+The concrete configuration decision for the existing environment is:
+
+| Type | Proposed reference | Exact boundary |
+| --- | --- | --- |
+| Variable | `NEXUS_GALAXY_READ_REPOSITORY` | One existing hosted ansiblegalaxy repository |
+| Variable | `NEXUS_GALAXY_READ_REPOSITORY_URL` | Its credential-free HTTPS repository URL |
+| Secret | `NEXUS_GALAXY_READ_USERNAME` | A dedicated reader for that repository |
+| Secret | `NEXUS_GALAXY_READ_PASSWORD` | Its password or user-token secret |
+
+These are proposed references, not configured or granted credentials. An
+existing approved external-secret delivery path can replace these proposed
+GitHub Secret references without changing the exact repository-read scope.
+No secret value should be requested or copied into the chat. The
+reader requires only browse/read on the exact existing repository. It must
+have no upload, delete, redeploy, or administration privilege. Provisioning or
+delegating this access requires the authorized credential custodian; no
+publisher credential, anonymous fallback, or new App permission is allowed.
+No secret value belongs in this document, Jira, or generated evidence.
+
+## Native code path and later runtime acceptance
+
+The workflow exposes exactly `request_id` and `request_json`, binds
+the protected controller SHA and App identity, and validates the fresh producer
+run before reading a protected credential. Empty configuration fails before
+credential, download or publication effects. Authenticated Nexus readback
+rejects redirects and proves exact size and digest without rebuilding or
+changing the candidate. Existing read-only Release App scope retrieves the
+exact producer-run/attempt stage artifact and tested runtime dependency bundle;
+checksums bind staged and independently downloaded candidate bytes. No new App
+permission or personal token is needed.
+
+Matrices come from the exact protected source registry. The immutable
+validation-owned quality action executes real scenarios with owned cleanup,
+JUnit/Allure and strict evidence gates. Signing requires every prior native job
+to have completed successfully in the same run/attempt, including actual Heavy
+and Application Acceptance cells. Missing, failed, skipped, duplicate or
+foreign-attempt results cannot authorize a receipt. There is no no-op fallback.
+The receipt signer uses OIDC for signing. Only the delegated Heavy/Application jobs additionally receive OIDC for the installed Root runtime authentication; hosted input validation does not.
+
+Local validation stays deterministic in read-only pinned Devtools. Protected
+runtime readback explicitly enables network and workspace output; receipt
+construction enables workspace output only. A trap removes the temporary
+reader file, which is excluded from every artifact. The final receipt artifact
+contains exactly the canonical JSON and its Sigstore bundle.
+
+Supplementary remains responsible for verifying that receipt and publishing
+the same candidate bytes to Galaxy. Its existing #1167/#1168 integration is
+prepared separately against current protected develop; it has no operational
+receiver acceptance merely because local integration tests pass.
+
+The transition workflow and existing release functions remain until the paired
+runtime path is accepted. Code delivery requires current-head native review and
+normal protected integration. Later LI-371/LI-118 runtime evidence must prove
+real infrastructure/configuration, real profiles and the exact signed receipt
+before Galaxy cutover. LI-360 retains the separately recorded native workflow
+and release acceptance boundary. Local tests and code delivery are not runtime
+acceptance.
+
+## Protected Devtools execution contract
+
+The quality action delegates container creation exclusively to the centrally
+managed `scripts/wunder-devtools-ee.sh`. Its `protected-incus-v1` extension and
+matching boundary tests must be delivered through the approved Source adoption
+path before this action can execute. The local action adapter does not invoke a
+container engine or provide a fallback. The REP-120 distribution hold and the
+missing Incus client in the currently inspected released image remain real
+prerequisites; this code does not claim that either has been resolved.
+
+The dispatcher and its managed companion come from `scripts` at the native
+SHA-pinned ModuLix external action archive root. They do not come from
+`GITHUB_WORKSPACE`, which is the Supplementary source checkout at `source-sha`.
+Both the initial preflight and cell-run steps forward the same complete action
+input set plus fixed native `github.action_repository`, `github.action_ref`,
+`github.action_path`, and controller `github.sha` contexts. The preflight runs
+before candidate download. Native SHA-pinned transport and the protected
+runner form the platform trust boundary; local environment/path checks do not
+claim independent cryptographic provenance. Final native review must verify
+the actual external-action pins bind the reviewed archive.
+
+The admitted context uses one container for the complete matrix cell. Source
+is read-only at `/workspace`, the exact downloaded candidate and tested runtime
+bundle are read-only at `/candidate`, and the immutable action is read-only at
+`/controller`. Only the run-owned cell directory is writable at `/quality`.
+Its temporary state is `/quality/tmp`; artifacts, Molecule state, extracted
+collections, logs and final packages never use writable source-tree paths.
+Root, source, controller, candidate and the private Incus context stay
+read-only. The managed launcher binds the actual image digest and effective
+UID/GID; host-native interpreters and dependency installations are absent.
+
+The launcher supplies only the declared action inputs, bound GitHub run
+identities, necessary runner metadata and private runtime paths. Neither a
+host home nor a Docker socket nor GitHub command-file directories are mounted.
+The complete cell keeps generated masked secrets and private command files in
+the isolated `/tmp/wunder` home tmpfs. Raw cell state is removed only after both
+capture and owned destruction return confirmed success. Otherwise the existing
+private host-backed `/quality/tmp` and `/quality/artifacts` remain available.
+The additional `/quality/recovery/context.json` records only run, source,
+project and target identities, with directory mode 0700 and file mode 0600.
+RAM command files, generated passwords and Incus TLS material are never copied
+there. Recovery is outside the redacted package and upload path.
+Its private environment file cannot replace PATH, HOME, Incus configuration,
+image identity, command-file paths or launcher-owned UID bindings. The central
+dispatcher accepts only the fixed result schema from `/quality/control/result.json`,
+maps `/quality/package` back to that cell's host directory and emits the two
+artifact outputs. Upload success is independently mandatory after cell success.
+
+Later LTN-371 runtime activation must supply a private run-bound HTTPS Incus
+context, mounted read-only at `/incus`, without granting general host access.
+The context contains exactly `binding.json`, `config.yml`, `client.crt`,
+`client.key`, and `servercerts/quality.crt`. Files are ordinary controller-owned
+0600 files; directories are 0700. The binding schema is 1 and contains exactly
+`repository`, `run_id`, `run_attempt`, `server`, `project`, and `expires_at` in
+addition to `schema`. Its identities match the actual current run; its expiry
+must be in the future and at most 90 minutes away. The Incus configuration
+contains the authenticated HTTPS remote `quality`, selects it by default
+and binds the same server and project, with pre-provisioned server trust.
+Its only other remote is `images`, with exactly
+`addr: https://images.linuxcontainers.org`, `protocol: simplestreams`, and
+`public: true`, so the registry's `images:ubuntu/24.04` reference resolves
+without inheriting a global client configuration. Foreign image servers and
+additional remote keys fail closed in both admission and execution.
+VM execution remains deferred until the producer has a qualified remote-aware
+lifecycle. The current context admits containers and rejects VM inputs before
+candidate or infrastructure effects.
+Its exact remote keys are `addr`, `auth_type: tls`, `project`, `protocol: incus`
+and `public: false`, following the
+[pinned Incus schema](https://github.com/lxc/incus/blob/01f81e5e607bbb5818410318e4b3496ad1820824/shared/cliconfig/remote.go).
+The CLI-style `auth-type` spelling and unknown keys fail closed. The central
+offline container preflight parses the private binding/configuration and
+loads the client key/certificate and server trust before any target contact.
+Docker and rootful Podman preserve the nonroot runner UID/GID; rootless Podman
+is unsupported by this context version and stops before any mount.
+Missing, foreign, expired, public, linked or permissive context fails before
+candidate installation or infrastructure effects. This is a proposed delivery
+contract for the credential custodian, not configured access or a request for
+credentials in this code increment.
+
+All initialization, candidate integrity checks, Molecule phases, dependency
+inventories, evidence validators and packaging execute inside that container.
+The test phase retains its 1800-second limit, followed by unconditional
+600-second evidence capture and 600-second owned destruction, with the existing
+30-second kill grace. A failed or timed-out phase cannot become a successful
+receipt input. Diagnostics precede destruction; lifecycle and evidence failures
+remain independently fatal. Catchable SIGINT/SIGTERM cancellation stops all
+live processes in the active phase's freshly created session, including the
+separate process group created by GNU `timeout`, before running the exact capture
+and destroy finalizers. Linux pidfd support is required before ordinary effects;
+there is no numeric-PID fallback or additional capability grant. Process identity
+and session membership are rechecked after opening the kernel handle, and signals
+use that handle so PID reuse cannot retarget them. Every phase, including one whose parent shell exits normally,
+must prove its session inactive before another phase starts. On cancellation each
+finalizer has a 120-second bound; stopping uses a two-second TERM grace followed
+by KILL and a two-second quiescence bound. Repeated signals defer during stopping
+and finalization. An unavailable process inventory or unconfirmed stop prevents
+further finalizer effects and retains private recovery without public outputs.
+Normal GNU timeout enforcement remains unchanged. A destroy interrupted after an uncertain
+effect is not retried. Cancellation never publishes a successful result or
+artifact output; unconfirmed capture or destruction preserves private recovery
+state through container exit. Runner-loss recovery still requires the established
+ownership-aware stale-resource collector; a container lifetime is not proof of
+cleanup after runner loss.
+
+## Isolated Heavy worker routing candidate
+
+The separate reusable `collection-quality-profile-isolated.yml` admits only the
+Validation Main candidate receiver, its native release App actor and original
+triggering actor, `workflow_dispatch`, and attempt one. PRs, fork repositories,
+other workflows, branch substitutions and human reruns fail in hosted validation
+before any self-hosted worker is scheduled. The complete admission contract
+is compiled by the immutable `admit-incus-profile` action inside digest-pinned
+Devtools on the hosted runner, offline and read-only. Only the action's own
+public compiler directory is mounted; no candidate checkout, credentials or
+service socket is used. The action rejects unknown JSON fields/axes and malformed
+cell values before publishing a canonical include-only matrix. The callee's
+strategy consumes only this output, never raw matrix input. The existing reusable Collection
+workflow is unchanged and grants no alternative route into the isolated group.
+
+The isolated job selects only `lit-pis-prd-isolated` with the fixed host and
+isolation labels, including `ciwkr01`. The GitHub Runner service remains on that
+existing physical host. Heavy and Application Acceptance create their disposable
+Incus test VMs on the same host through `lit.ubuntu.incus_instance`; no additional
+machine or VM-hosted GitHub Runner is required. Matrix runner labels cannot
+change that selection. Native admission must still bind the actual assigned job
+to the selected physical Runner service; routing labels alone do not do so. The
+fixed `heavy-isolated-pilot` environment is a required configuration reference,
+not a claim of existing configuration. The path references no production secret
+or repository reader credential. Hosted validation retains only `contents: read`.
+The physical test job receives `contents: read`, `actions: read` and `id-token:
+write` for the exact job API/OIDC proof to the installed Root runtime. Its
+caller jobs explicitly grant the same permissions; no production secrets are
+inherited.
+
+The receiver delegates Heavy and then Application Acceptance to immutable
+workflow commit `70c47dbfce6ce12990e037e5be7c2c70d11e4cdf`. Hosted callee input
+validation alone cannot satisfy the receipt: native test-cell jobs are required.
+This is a local candidate pin containing the physical-runner routing correction.
+It still requires complete integration and normal protected publication before
+it can become the actual Main runtime contract.
+
+Management preparation must grant the isolated reusable workflow at the same
+immutable protected-source commit called by Main. The workflow bytes must match
+the reviewed admission hash; an older workflow is not sufficient. Main request,
+producer-run and signed-receipt checks remain separate, unchanged boundaries.
+The dedicated workflow contains no skipped legacy branch, so it preserves the
+receiver's requirement that every prior native job succeeds before signing.
+
+Each matrix is serial. The trusted controller must additionally reserve the
+selected existing physical Runner and serialize shared Incus capacity across
+runs. It must validate native service/job assignment and test-VM ownership,
+apply scoped access/egress policy, retain diagnostics and destroy only owned
+test resources. Preserve the physical Runner registration and foreign services.
+An independent collector must cover runner loss. Local pilot cleanup alarms use
+`root@localhost`; full Atlas/personal notification delivery is deferred and is
+not a prerequisite for this pilot. Routing labels do not prove global capacity,
+VM ownership, cleanup or operating acceptance. The existing VM-input
+qualification hold also remains in effect.
+
+
+### Typed image provenance
+
+Controller dependency capture resolves the requested image alias using the
+bound instance type (`--vm` for VMs, no flag for containers), matching Source
+initialization. It records reference, type and the immutable fingerprint.
+Owned-instance evidence independently reads `volatile.base_image`; native VM
+start, agent readiness and functional checks remain required. The Root-selected
+controller archive is separately sealed from the unchanged runtime-action pin.
+
+### Installed physical runtime adapter candidate
+
+The isolated callee invokes the immutable `run-incus-runtime-profile` action.
+It does not check out or execute the candidate on the persistent host and does
+not download candidate artifacts into its workspace. The trusted Root registry
+and native intake must bind the exact run, candidate/source, controller, image,
+resources and custody before the job is admitted. A profile/scenario/target
+locator selects that prepared policy and grants no authority by itself. The
+action also supplies the expected matrix/source metadata to verify the returned
+evidence; those values are not an engine or infrastructure request to Root.
+
+The action checks the installed `/usr/libexec/lightning-it/incus-runtime-client`
+and calls its fixed `run-profile` entry. The client authenticates with the
+Root-owned local socket using the short-lived job token and a challenge-bound
+OIDC token. It never forwards these tokens to the test EE. The Root service owns
+the pinned EE and the same-host Incus test-VM lifecycle. Only the client's full
+sanitized evidence outputs reach the artifact upload step; execution, cleanup
+and upload must all succeed before the profile can pass. Failed diagnostics can
+upload without changing a failed or cancelled result.
+
+Inside the EE, the controller accepts the Root-published schema2 transport
+binding, including its runtime facts and upstream admission. Transport mode,
+remote and project are derived from that private mount, never from job inputs
+or step command files. The Source TLS helper then checks the same runtime facts
+and live remote capacity before candidate installation. The VM route does not
+run host-wide stale-resource pruning or use the tooling container's memory and
+disk as evidence of test-host capacity. Every Molecule phase receives the same
+scoped TLS target. Legacy schema1/container dispatch retains its VM rejection;
+these changes do not qualify an unadmitted VM or activate a host.
+
+The Root factory verifies the GitHub commit/tree and every archive blob before
+sealing the Source mount. GitHub archives contain no `.git` checkout. For this
+schema2 route, Root therefore derives `source-provenance.json` in the read-only
+candidate mount, bound by the engine descriptor. The controller checks the exact
+Source repository/commit, complete file and directory inventory, executable
+modes, sizes and Git blob IDs against that record. Scenario/registry evidence
+uses those same verified bytes. No synthetic Git commit, checkout or successful
+Git status is created. Legacy checkout execution retains its Git checks. The
+derived record is not a job-supplied proof or an independent admission grant.
+
+This remains a private integration candidate. The native Root registry/intake,
+physical Runner migration, engine, TLS/custody, VM lifecycle and complete
+acceptance are still required. The new action commit and callee/Main/Management
+pins must all be published through the normal coordinated path after the whole
+local Story passes. A passing adapter test is not a Heavy result.

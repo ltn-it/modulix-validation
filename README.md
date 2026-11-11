@@ -211,10 +211,14 @@ docs/                                      validation documentation
 
 ## Current AAP Workflow Secrets
 
-Set these secrets on `lightning-it/modulix-validation` for the current AAP
-suite:
+Required for the current AAP suite:
 
-- `LIT_REPOSITORY_READ_TOKEN`: read-only token for cross-repository checkouts.
+- `RELEASE_AUTOMATION_APP_CLIENT_ID`: organization variable for the bounded
+  cross-repository checkout App.
+- `RELEASE_AUTOMATION_APP_PRIVATE_KEY`: organization secret for that App. The
+  workflow mints a short-lived `contents:read` token limited to the three source
+  repositories used during matrix preparation, and a separate token limited to
+  the five source repositories used by each matrix job.
 - `RH_AUTOMATION_HUB_TOKEN`: Red Hat offline token for certified collection
   installation.
 
@@ -312,3 +316,17 @@ The evidence records:
 - security scan status
 
 See [GitHub Releases](../../releases), [RELEASE.md](./RELEASE.md), and [TESTING.md](./TESTING.md) for the release process and validation model.
+
+## Collection release transition
+
+The manual `collection-release-transition.yml` receiver accepts the six fixed
+`ansible-collection-*` repositories under `ltn-it` and their historical
+`lightning-it` names. It preserves the supplied source name and requires its
+live GitHub repository ID to match the known Collection object before recording
+transition evidence. The destination must remain repository `1269461997`.
+
+The receiver preserves its existing runner and records an explicit transition no-op. It
+does not run Heavy/Application Acceptance or publish to Galaxy; its evidence
+keeps validation and release eligibility false. A dispatch recovery for an
+already published release keeps the original source commit, version, artifact
+filename and SHA-256.

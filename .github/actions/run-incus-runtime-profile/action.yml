@@ -1,0 +1,104 @@
+---
+name: Run controller-owned Incus profile
+description: Request one prepared cell from the installed Root runtime on the existing physical runner.
+
+inputs:
+  profile:
+    description: Quality profile name.
+    required: true
+  scenario:
+    description: Molecule scenario name.
+    required: true
+  target:
+    description: Registry target name.
+    required: true
+  target-disposition:
+    description: Registry target disposition; candidate runs can never produce release evidence.
+    required: false
+    default: supported
+  roles:
+    description: Comma-separated roles covered by this scenario.
+    required: true
+  image:
+    description: Resolved Incus image.
+    required: true
+  instance-type:
+    description: Expected instance type from the prepared Root cell policy.
+    required: true
+  candidate-artifact:
+    description: Name of the exact collection candidate artifact.
+    required: true
+  source-sha:
+    description: Reviewed source commit represented by the candidate and evidence.
+    required: true
+  junit-required:
+    description: Whether the registry requires a unique scenario JUnit report.
+    required: true
+  allure-required:
+    description: Whether the registry requires final Allure results.
+    required: true
+  cpu-limit:
+    description: Incus CPU limit.
+    required: true
+  memory-limit:
+    description: Incus memory limit.
+    required: true
+  disk-limit:
+    description: Incus root disk limit.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Require installed Root runtime before requesting a test cell
+      shell: bash
+      run: |
+        set -euo pipefail
+        /usr/libexec/lightning-it/incus-runtime-client check
+
+    - name: Execute and verify the prepared Incus test cell
+      id: cell
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        QUALITY_INPUT_PROFILE: ${{ inputs.profile }}
+        QUALITY_INPUT_SCENARIO: ${{ inputs.scenario }}
+        QUALITY_INPUT_TARGET: ${{ inputs.target }}
+        QUALITY_INPUT_TARGET_DISPOSITION: ${{ inputs.target-disposition }}
+        QUALITY_INPUT_ROLES: ${{ inputs.roles }}
+        QUALITY_INPUT_IMAGE: ${{ inputs.image }}
+        QUALITY_INPUT_INSTANCE_TYPE: ${{ inputs.instance-type }}
+        QUALITY_INPUT_CANDIDATE_ARTIFACT: ${{ inputs.candidate-artifact }}
+        QUALITY_INPUT_SOURCE_SHA: ${{ inputs.source-sha }}
+        QUALITY_INPUT_JUNIT_REQUIRED: ${{ inputs.junit-required }}
+        QUALITY_INPUT_ALLURE_REQUIRED: ${{ inputs.allure-required }}
+        QUALITY_INPUT_CPU_LIMIT: ${{ inputs.cpu-limit }}
+        QUALITY_INPUT_MEMORY_LIMIT: ${{ inputs.memory-limit }}
+        QUALITY_INPUT_DISK_LIMIT: ${{ inputs.disk-limit }}
+      run: |
+        set -euo pipefail
+        exec /usr/libexec/lightning-it/incus-runtime-client run-profile \
+          --profile "$QUALITY_INPUT_PROFILE" \
+          --scenario "$QUALITY_INPUT_SCENARIO" \
+          --target "$QUALITY_INPUT_TARGET"
+
+    - name: Upload verified sanitized cell evidence
+      id: upload
+      if: always() && steps.cell.outputs.package-directory != '' && steps.cell.outputs.result-artifact != ''
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+      with:
+        name: ${{ steps.cell.outputs.result-artifact }}
+        path: ${{ steps.cell.outputs.package-directory }}
+        if-no-files-found: error
+        retention-days: 30
+
+    - name: Require actual execution and artifact upload success
+      if: always()
+      shell: bash
+      env:
+        CELL_OUTCOME: ${{ steps.cell.outcome }}
+        UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+      run: |
+        set -euo pipefail
+        test "$CELL_OUTCOME" = success
+        test "$UPLOAD_OUTCOME" = success

@@ -159,10 +159,14 @@ class CiProfileContractTests(unittest.TestCase):
             ).read_text(encoding="utf-8")
         )
         validation = workflow["jobs"]["transition-noop"]["steps"][0]["run"]
+        # Isolate artifact validation from the public repository metadata lookup.
+        validation = "gh() { printf '%s\\n' '1103407173'; }\n" + validation
         base_env = {
             "SOURCE_REPOSITORY": "lightning-it/ansible-collection-supplementary",
             "SOURCE_SHA": "f" * 40,
             "ARTIFACT_SHA256": "a" * 64,
+            "GITHUB_REPOSITORY_ID": "1269461997",
+            "GITHUB_OUTPUT": "/dev/null",
         }
 
         for version, artifact_name in (

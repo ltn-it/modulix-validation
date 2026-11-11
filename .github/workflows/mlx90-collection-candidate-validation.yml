@@ -1,0 +1,215 @@
+# yamllint disable rule:line-length
+# yamllint disable rule:truthy
+---
+name: MLX-90 collection candidate validation
+run-name: MLX-90 collection candidate / ${{ inputs.request_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      request_id:
+        required: true
+        type: string
+        description: SHA-256 of canonical request_json.
+      request_json:
+        required: true
+        type: string
+        description: Complete immutable v2 collection validation request.
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: mlx90-collection-candidate-${{ inputs.request_id }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate immutable request
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: mlx90-final-acceptance
+    outputs:
+      source-sha: ${{ steps.context.outputs.source-sha }}
+      source-run-id: ${{ steps.context.outputs.source-run-id }}
+      source-run-attempt: ${{ steps.context.outputs.source-run-attempt }}
+      heavy: ${{ steps.matrices.outputs.heavy }}
+      acceptance: ${{ steps.matrices.outputs.acceptance }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          persist-credentials: false
+      - id: context
+        uses: ./.github/actions/collection-candidate-context
+        with:
+          request-id: ${{ inputs.request_id }}
+          request-json: ${{ inputs.request_json }}
+          nexus-repository: ${{ vars.NEXUS_GALAXY_READ_REPOSITORY }}
+          nexus-repository-url: ${{ vars.NEXUS_GALAXY_READ_REPOSITORY_URL }}
+      - name: Checkout exact protected producer source for registry selection
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          repository: ltn-it/ansible-collection-supplementary
+          ref: ${{ steps.context.outputs.source-sha }}
+          path: source
+          persist-credentials: false
+      - name: Require real supported Heavy and Application matrices
+        id: matrices
+        run: |
+          set -euo pipefail
+          for profile in heavy application_acceptance; do
+            scripts/wunder-devtools-ee.sh python3 source/scripts/validate-role-coverage.py \
+              matrix --profile "$profile" > ".candidate-control/$profile.json"
+            jq -e '.include | type == "array" and length > 0' \
+              ".candidate-control/$profile.json" > /dev/null
+          done
+          echo "heavy=$(jq -c . .candidate-control/heavy.json)" >> "$GITHUB_OUTPUT"
+          echo "acceptance=$(jq -c . .candidate-control/application_acceptance.json)" >> "$GITHUB_OUTPUT"
+
+  readback:
+    name: Nexus exact-byte readback
+    needs: validate
+    runs-on: [self-hosted, linux, x64, incus]
+    timeout-minutes: 30
+    environment: mlx90-final-acceptance
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/collection-candidate-context
+        with:
+          request-id: ${{ inputs.request_id }}
+          request-json: ${{ inputs.request_json }}
+          nexus-repository: ${{ vars.NEXUS_GALAXY_READ_REPOSITORY }}
+          nexus-repository-url: ${{ vars.NEXUS_GALAXY_READ_REPOSITORY_URL }}
+      - name: Read exact producer-stage artifact with existing read-only App scope
+        id: source-app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510  # v3.3.0
+        with:
+          client-id: ${{ vars.RELEASE_AUTOMATION_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_AUTOMATION_APP_PRIVATE_KEY }}
+          owner: ltn-it
+          repositories: ansible-collection-supplementary
+          permission-actions: read
+      - name: Retrieve exact tested dependency bundle without rebuilding candidate
+        env:
+          GH_TOKEN: ${{ steps.source-app.outputs.token }}
+          APP_INSTALLATION: ${{ steps.source-app.outputs.installation-id }}
+          APP_SLUG: ${{ steps.source-app.outputs.app-slug }}
+          SOURCE_RUN: ${{ needs.validate.outputs.source-run-id }}
+          SOURCE_ATTEMPT: ${{ needs.validate.outputs.source-run-attempt }}
+        run: |
+          set -euo pipefail
+          test "$APP_INSTALLATION" = 148019054
+          test "$APP_SLUG" = lightning-it-release-automation
+          gh run download "$SOURCE_RUN" --repo ltn-it/ansible-collection-supplementary \
+            --name "release-stage-$SOURCE_RUN-$SOURCE_ATTEMPT" --dir .candidate-control/stage
+          gh api "repos/ltn-it/ansible-collection-supplementary/actions/runs/$SOURCE_RUN" \
+            > .candidate-control/producer-run.json
+      - name: Read the configured Nexus candidate and verify exact bytes
+        env:
+          REQUEST_ID: ${{ inputs.request_id }}
+          CONTROLLER_SHA: ${{ github.sha }}
+          NEXUS_USERNAME: ${{ secrets.NEXUS_GALAXY_READ_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_GALAXY_READ_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+          trap 'rm -f .candidate-control/nexus-auth.json' EXIT
+          jq -n 'env | {username:.NEXUS_USERNAME,password:.NEXUS_PASSWORD}' \
+            > .candidate-control/nexus-auth.json
+          WUNDER_DEVTOOLS_WORKSPACE_MODE=rw WUNDER_DEVTOOLS_NETWORK=bridge scripts/wunder-devtools-ee.sh \
+            python3 scripts/collection_candidate_receiver.py readback \
+            --request-id "$REQUEST_ID" --controller-sha "$CONTROLLER_SHA"
+      - name: Publish only the verified immutable candidate and tested dependencies
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6
+        with:
+          name: mlx90-candidate-${{ inputs.request_id }}
+          path: .candidate-control/candidate/
+          if-no-files-found: error
+          retention-days: 7
+
+  heavy:
+    name: Heavy
+    needs: [validate, readback]
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    uses: ltn-it/modulix-validation/.github/workflows/collection-quality-profile-isolated.yml@70c47dbfce6ce12990e037e5be7c2c70d11e4cdf
+    with:
+      profile: heavy
+      matrix-json: ${{ needs.validate.outputs.heavy }}
+      candidate-artifact: mlx90-candidate-${{ inputs.request_id }}
+      source-sha: ${{ needs.validate.outputs.source-sha }}
+      source-repository: ltn-it/ansible-collection-supplementary
+      cpu-limit: '4'
+      memory-limit: 12GiB
+      disk-limit: 24GiB
+
+  application:
+    name: Application Acceptance
+    needs: [validate, readback, heavy]
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    uses: ltn-it/modulix-validation/.github/workflows/collection-quality-profile-isolated.yml@70c47dbfce6ce12990e037e5be7c2c70d11e4cdf
+    with:
+      profile: application_acceptance
+      matrix-json: ${{ needs.validate.outputs.acceptance }}
+      candidate-artifact: mlx90-candidate-${{ inputs.request_id }}
+      source-sha: ${{ needs.validate.outputs.source-sha }}
+      source-repository: ltn-it/ansible-collection-supplementary
+      cpu-limit: '4'
+      memory-limit: 12GiB
+      disk-limit: 24GiB
+
+  sign:
+    name: Sign validation receipt
+    needs: [validate, readback, heavy, application]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: mlx90-final-acceptance
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/collection-candidate-context
+        with:
+          request-id: ${{ inputs.request_id }}
+          request-json: ${{ inputs.request_json }}
+          nexus-repository: ${{ vars.NEXUS_GALAXY_READ_REPOSITORY }}
+          nexus-repository-url: ${{ vars.NEXUS_GALAXY_READ_REPOSITORY_URL }}
+      - name: Bind receipt to every real current-attempt native job
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUEST_ID: ${{ inputs.request_id }}
+          CONTROLLER_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          gh api --paginate --slurp \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" \
+            | jq '[.[].jobs[]]' > .candidate-control/jobs.json
+          WUNDER_DEVTOOLS_WORKSPACE_MODE=rw scripts/wunder-devtools-ee.sh \
+            python3 scripts/collection_candidate_receiver.py receipt \
+            --request-id "$REQUEST_ID" --controller-sha "$CONTROLLER_SHA"
+      - name: Install keyless signing tool
+        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532  # v4.1.3
+      - name: Sign exact canonical receipt using protected workflow OIDC identity
+        run: |
+          set -euo pipefail
+          receipt=.candidate-control/receipt/mlx90-collection-validation-receipt.json
+          cosign sign-blob --yes --bundle "$receipt.sigstore.json" "$receipt"
+      - name: Upload exactly the receipt and signature bundle
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6
+        with:
+          name: mlx90-collection-validation-${{ inputs.request_id }}
+          path: .candidate-control/receipt/
+          if-no-files-found: error
+          retention-days: 7
