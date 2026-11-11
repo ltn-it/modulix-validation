@@ -134,7 +134,10 @@ jobs:
   profile-results:
     name: Final quality / ${{ inputs.profile }} / ${{ matrix.scenario }} / ${{ matrix.target }}
     needs: [validate-inputs, profile-cells]
-    if: needs.validate-inputs.outputs.profile != 'operating'
+    if: >-
+      always() && needs.validate-inputs.result == 'success' &&
+      (needs.validate-inputs.outputs.profile == 'heavy' ||
+      needs.validate-inputs.outputs.profile == 'application_acceptance')
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -207,7 +210,9 @@ jobs:
   operating-results:
     name: Operating result / ${{ needs.validate-inputs.outputs.operating-case }}
     needs: [validate-inputs, operating-cell]
-    if: needs.validate-inputs.outputs.profile == 'operating'
+    if: >-
+      always() && needs.validate-inputs.result == 'success' &&
+      needs.validate-inputs.outputs.profile == 'operating'
     runs-on:
       group: ${{ needs.validate-inputs.outputs.worker-group }}
       labels:

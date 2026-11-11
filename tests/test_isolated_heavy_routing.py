@@ -104,7 +104,9 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
         self.assertEqual(observer["name"],
             "Final quality / ${{ inputs.profile }} / ${{ matrix.scenario }} / ${{ matrix.target }}")
         self.assertEqual(observer["runs-on"], jobs["profile-cells"]["runs-on"])
-        self.assertEqual(observer["if"], "needs.validate-inputs.outputs.profile != 'operating'")
+        self.assertEqual(observer["if"], "always() && needs.validate-inputs.result == 'success' && "
+                         "(needs.validate-inputs.outputs.profile == 'heavy' || "
+                         "needs.validate-inputs.outputs.profile == 'application_acceptance')")
         self.assertEqual(observer["strategy"]["max-parallel"], 1)
         self.assertEqual(observer["permissions"], {"contents": "read", "checks": "read", "actions": "read", "id-token": "write"})
         step = observer["steps"][0]
@@ -132,7 +134,10 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
         for name, action in (("operating-cell", "run-operating-drill"),
                              ("operating-results", "observe-operating-drill")):
             job = jobs[name]
-            self.assertEqual(job["if"], "needs.validate-inputs.outputs.profile == 'operating'")
+            expected = "needs.validate-inputs.outputs.profile == 'operating'"
+            if name == "operating-results":
+                expected = "always() && needs.validate-inputs.result == 'success' && " + expected
+            self.assertEqual(job["if"], expected)
             self.assertNotIn("strategy", job)
             self.assertEqual(job["runs-on"], jobs["profile-cells"]["runs-on"])
             self.assertEqual(job["environment"], jobs["profile-cells"]["environment"])
