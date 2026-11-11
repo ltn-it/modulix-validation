@@ -51,11 +51,15 @@ runs:
         DISK_LIMIT: ${{ inputs.disk-limit }}
         CALLER_REPOSITORY: ${{ github.repository }}
         CALLER_REPOSITORY_ID: ${{ github.repository_id }}
+        CALLER_REPOSITORY_OWNER_ID: ${{ github.repository_owner_id }}
         CALLER_EVENT: ${{ github.event_name }}
         CALLER_REF: ${{ github.ref }}
+        CALLER_REF_PROTECTED: ${{ github.ref_protected }}
+        CALLER_SHA: ${{ github.sha }}
         CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
         CALLER_ACTOR: ${{ github.actor }}
         CALLER_ACTOR_ID: ${{ github.actor_id }}
+        CALLER_ACTOR_TYPE: ${{ github.event.sender.type }}
         CALLER_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
         CALLER_ATTEMPT: ${{ github.run_attempt }}
       run: |
@@ -69,7 +73,8 @@ runs:
           -e PROFILE -e MATRIX_JSON -e SOURCE_SHA -e SOURCE_REPOSITORY \
           -e CANDIDATE_ARTIFACT -e CPU_LIMIT -e MEMORY_LIMIT -e DISK_LIMIT \
           -e CALLER_REPOSITORY -e CALLER_REPOSITORY_ID -e CALLER_EVENT -e CALLER_REF \
-          -e CALLER_WORKFLOW_REF -e CALLER_ACTOR -e CALLER_ACTOR_ID \
+          -e CALLER_REPOSITORY_OWNER_ID -e CALLER_REF_PROTECTED -e CALLER_SHA \
+          -e CALLER_WORKFLOW_REF -e CALLER_ACTOR -e CALLER_ACTOR_ID -e CALLER_ACTOR_TYPE \
           -e CALLER_TRIGGERING_ACTOR -e CALLER_ATTEMPT \
           quay.io/l-it/ee-wunder-devtools-ubi9:v1.18.2@sha256:58955457d3410706520f34fa7ea9823d5650aa4844c562cd5c0107024d825711 \
           python3 /admission/admission.py >> "$GITHUB_OUTPUT"

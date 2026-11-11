@@ -29,10 +29,34 @@ def environment(profile="heavy"):
     value = json.loads((FIXTURES / "pending-physical-vm.json").read_text())[profile]
     return {
         **ADMISSION.CALLER,
+        "CALLER_REPOSITORY_OWNER_ID": "54334171",
+        "CALLER_REF_PROTECTED": "true",
+        "CALLER_SHA": "c" * 40,
+        "CALLER_ACTOR_TYPE": "Bot",
         "PROFILE": profile,
         "MATRIX_JSON": json.dumps(value),
         "SOURCE_SHA": "a" * 40,
         "CANDIDATE_ARTIFACT": "mlx90-candidate-" + "b" * 64,
+    }
+
+
+def supplementary_environment(profile="heavy", actor="litroc"):
+    actors = {"litroc": "76040632", "litdeg": "247824904"}
+    return {
+        **environment(profile),
+        "CALLER_REPOSITORY": "ltn-it/ansible-collection-supplementary",
+        "CALLER_REPOSITORY_ID": "1103407173",
+        "CALLER_REPOSITORY_OWNER_ID": "54334171",
+        "CALLER_EVENT": "push",
+        "CALLER_REF": "refs/heads/main",
+        "CALLER_REF_PROTECTED": "true",
+        "CALLER_WORKFLOW_REF": "ltn-it/ansible-collection-supplementary/.github/workflows/collection-ci.yml@refs/heads/main",
+        "CALLER_SHA": "a" * 40,
+        "CALLER_ACTOR": actor,
+        "CALLER_ACTOR_ID": actors[actor],
+        "CALLER_ACTOR_TYPE": "User",
+        "CALLER_TRIGGERING_ACTOR": actor,
+        "CANDIDATE_ARTIFACT": "collection-candidate-" + "a" * 40,
     }
 
 
@@ -58,6 +82,106 @@ class AdmissionCompilerTests(unittest.TestCase):
                     self.assertTrue(
                         all(cell["instance_type"] == "vm" for cell in matrix["include"])
                     )
+
+    def test_direct_supplementary_main_push_compiles_same_canonical_matrix(self):
+        for profile in ("heavy", "application_acceptance"):
+            for actor in ("litroc", "litdeg"):
+                with self.subTest(profile=profile, actor=actor):
+                    env = supplementary_environment(profile, actor)
+                    self.assertEqual(
+                        ADMISSION.admit(env), ADMISSION.admit(environment(profile))
+                    )
+
+    def test_direct_domain_rejects_mixed_identity_artifact_and_unprotected_sources(
+        self,
+    ):
+        original = supplementary_environment()
+        receiver = environment()
+        for key, value in receiver.items():
+            if key in original and value != original[key]:
+                with self.subTest(receiver_field=key), self.assertRaises(ValueError):
+                    ADMISSION.admit({**original, key: value})
+        invalid = {
+            "CALLER_REPOSITORY_OWNER_ID": ["42", "", None],
+            "CALLER_SHA": ["b" * 40, "main", None],
+            "CALLER_REF_PROTECTED": ["false", True, None],
+            "CALLER_ACTOR_TYPE": ["Bot", "", None],
+            "CALLER_ACTOR_ID": ["247824904", "42"],
+            "CALLER_TRIGGERING_ACTOR": ["litdeg", "foreign"],
+            "CALLER_EVENT": [
+                "pull_request",
+                "pull_request_target",
+                "workflow_dispatch",
+            ],
+            "CALLER_REF": ["refs/heads/develop", "refs/tags/v1.0.0"],
+            "CALLER_ATTEMPT": ["2", 1],
+            "CALLER_WORKFLOW_REF": [
+                "ltn-it/ansible-collection-supplementary/.github/workflows/other.yml@refs/heads/main",
+                "ltn-it/ansible-collection-supplementary/.github/workflows/collection-ci.yml@refs/heads/develop",
+            ],
+            "SOURCE_REPOSITORY": ["foreign/fork"],
+            "SOURCE_SHA": ["b" * 40],
+            "CANDIDATE_ARTIFACT": [
+                "collection-candidate-" + "b" * 40,
+                "mlx90-candidate-" + "b" * 64,
+            ],
+            "CPU_LIMIT": ["8"],
+            "MEMORY_LIMIT": ["8GiB"],
+            "DISK_LIMIT": ["20GiB"],
+        }
+        for key, values in invalid.items():
+            for value in values:
+                with (
+                    self.subTest(field=key, value=value),
+                    self.assertRaises((ValueError, TypeError)),
+                ):
+                    ADMISSION.admit({**original, key: value})
+        # A payload flag cannot select an alternate admission domain.
+        with self.assertRaises(ValueError):
+            ADMISSION.admit(
+                {**original, "ADMISSION_MODE": "mlx90", "CALLER_EVENT": "pull_request"}
+            )
+
+    def test_direct_domain_requires_every_identity_value(self):
+        env = supplementary_environment()
+        fields = [
+            *ADMISSION.SUPPLEMENTARY_CALLER,
+            "CALLER_ACTOR",
+            "CALLER_ACTOR_ID",
+            "CALLER_TRIGGERING_ACTOR",
+            "CALLER_SHA",
+            "PROFILE",
+            "SOURCE_SHA",
+            "CANDIDATE_ARTIFACT",
+        ]
+        for key in fields:
+            for bad in (None, "", "foreign", 1, True, [], {}):
+                with (
+                    self.subTest(key=key, value=bad),
+                    self.assertRaises((ValueError, TypeError)),
+                ):
+                    ADMISSION.admit({**env, key: bad})
+
+    def test_original_receiver_keeps_its_existing_identity_and_matrix_semantics(self):
+        receiver = environment()
+        projected = {
+            "CALLER_SHA",
+            "CALLER_REF_PROTECTED",
+            "CALLER_ACTOR_TYPE",
+            "CALLER_REPOSITORY_OWNER_ID",
+        }
+        original = {
+            key: value for key, value in receiver.items() if key not in projected
+        }
+        self.assertEqual(ADMISSION.admit(receiver), ADMISSION.admit(original))
+
+    def test_receiver_identity_cannot_borrow_individual_supplementary_fields(self):
+        receiver = environment()
+        direct = supplementary_environment()
+        for key in ADMISSION.CALLER:
+            if key in direct and direct[key] != receiver[key]:
+                with self.subTest(field=key), self.assertRaises(ValueError):
+                    ADMISSION.admit({**receiver, key: direct[key]})
 
     def test_identity_artifact_limits_and_scalar_inputs_fail_before_output(self):
         env = environment()
@@ -223,29 +347,59 @@ class AdmissionActionBoundaryTests(unittest.TestCase):
             self.assertNotIn("GITHUB_TOKEN", forwarded)
             self.assertNotIn("--privileged", args)
 
+    def test_trusted_direct_context_is_projected_from_github_and_never_action_inputs(
+        self,
+    ):
+        action = yaml.safe_load((ACTION / "action.yml").read_text())
+        step = action["runs"]["steps"][0]
+        expected = {
+            "CALLER_REPOSITORY": "${{ github.repository }}",
+            "CALLER_REPOSITORY_ID": "${{ github.repository_id }}",
+            "CALLER_REPOSITORY_OWNER_ID": "${{ github.repository_owner_id }}",
+            "CALLER_EVENT": "${{ github.event_name }}",
+            "CALLER_REF": "${{ github.ref }}",
+            "CALLER_REF_PROTECTED": "${{ github.ref_protected }}",
+            "CALLER_WORKFLOW_REF": "${{ github.workflow_ref }}",
+            "CALLER_SHA": "${{ github.sha }}",
+            "CALLER_ACTOR": "${{ github.actor }}",
+            "CALLER_ACTOR_ID": "${{ github.actor_id }}",
+            "CALLER_ACTOR_TYPE": "${{ github.event.sender.type }}",
+            "CALLER_TRIGGERING_ACTOR": "${{ github.triggering_actor }}",
+            "CALLER_ATTEMPT": "${{ github.run_attempt }}",
+        }
+        self.assertEqual({key: step["env"][key] for key in expected}, expected)
+        self.assertFalse(set(expected) & set(action["inputs"]))
+
     def test_actual_compiler_cli_publishes_all_or_no_outputs(self):
-        env = environment()
-        for bad in (False, True):
-            selected = dict(env)
-            if bad:
-                selected["MATRIX_JSON"] = json.dumps({"include": [], "os": ["foreign"]})
-            result = subprocess.run(
-                [sys.executable, str(ACTION / "admission.py")],
-                env=selected,
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=False,
-            )
-            if bad:
-                self.assertNotEqual(result.returncode, 0)
-                self.assertEqual(result.stdout, "")
-            else:
-                self.assertEqual(result.returncode, 0, result.stderr)
-                outputs = dict(
-                    line.split("=", 1) for line in result.stdout.splitlines()
+        for env in (
+            environment(),
+            supplementary_environment(),
+            supplementary_environment(actor="litdeg"),
+        ):
+            for bad in (False, True):
+                selected = dict(env)
+                if bad:
+                    selected["MATRIX_JSON"] = json.dumps(
+                        {"include": [], "os": ["foreign"]}
+                    )
+                result = subprocess.run(
+                    [sys.executable, str(ACTION / "admission.py")],
+                    env=selected,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
                 )
-                self.assertEqual(outputs["profile"], "heavy")
-                self.assertEqual(
-                    json.loads(outputs["matrix-json"]), json.loads(env["MATRIX_JSON"])
-                )
+                if bad:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(result.stdout, "")
+                else:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    outputs = dict(
+                        line.split("=", 1) for line in result.stdout.splitlines()
+                    )
+                    self.assertEqual(outputs["profile"], "heavy")
+                    self.assertEqual(
+                        json.loads(outputs["matrix-json"]),
+                        json.loads(env["MATRIX_JSON"]),
+                    )
