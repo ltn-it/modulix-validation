@@ -88,8 +88,8 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
         self.assertEqual(isolated["if"], "needs.validate-inputs.outputs.profile != 'operating'")
         self.assertEqual(isolated["needs"], "validate-inputs")
         self.assertNotIn("secrets.", json.dumps(isolated))
-        self.assertEqual(self.workflow["permissions"], {"contents": "read"})
-        self.assertEqual(isolated["permissions"], {"contents": "read", "actions": "read", "id-token": "write"})
+        self.assertEqual(self.workflow["permissions"], {"contents": "read", "checks": "read"})
+        self.assertEqual(isolated["permissions"], {"contents": "read", "checks": "read", "actions": "read", "id-token": "write"})
         self.assertEqual(len(isolated["steps"]), 1)
         action = isolated["steps"][0]
         self.assertRegex(action["uses"], r"^ltn-it/modulix-validation/\.github/actions/run-incus-runtime-profile@[0-9a-f]{40}$")
@@ -106,7 +106,7 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
         self.assertEqual(observer["runs-on"], jobs["profile-cells"]["runs-on"])
         self.assertEqual(observer["if"], "needs.validate-inputs.outputs.profile != 'operating'")
         self.assertEqual(observer["strategy"]["max-parallel"], 1)
-        self.assertEqual(observer["permissions"], {"contents": "read", "actions": "read", "id-token": "write"})
+        self.assertEqual(observer["permissions"], {"contents": "read", "checks": "read", "actions": "read", "id-token": "write"})
         step = observer["steps"][0]
         self.assertEqual(step["uses"],
             "ltn-it/modulix-validation/.github/actions/observe-incus-runtime-profile@48ea1fc7c85eb8029515d3be71c39e724435bb21")
@@ -137,7 +137,7 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
             self.assertEqual(job["runs-on"], jobs["profile-cells"]["runs-on"])
             self.assertEqual(job["environment"], jobs["profile-cells"]["environment"])
             self.assertFalse(job["concurrency"]["cancel-in-progress"])
-            self.assertEqual(job["permissions"], {"contents": "read", "actions": "read", "id-token": "write"})
+            self.assertEqual(job["permissions"], {"contents": "read", "checks": "read", "actions": "read", "id-token": "write"})
             self.assertEqual(len(job["steps"]), 1)
             step = job["steps"][0]
             self.assertEqual(step["with"], {"case": "${{ needs.validate-inputs.outputs.operating-case }}"})
