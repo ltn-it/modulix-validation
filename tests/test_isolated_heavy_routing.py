@@ -30,7 +30,7 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
         self.assertEqual(len(admission["steps"]), 1)
         step = admission["steps"][0]
         self.assertEqual(step["uses"],
-                         "ltn-it/modulix-validation/.github/actions/admit-incus-profile@b3cba6b39c3dccf344af5868f6281266d0f8f74d")
+                         "ltn-it/modulix-validation/.github/actions/admit-incus-profile@3fec83c07621cb84bf29d7f3b1fcf817f2fd2a5f")
         self.assertNotIn("run", step)
         self.assertNotIn("env", step)
         action = yaml.safe_load((ROOT / ".github/actions/admit-incus-profile/action.yml").read_text())
@@ -46,7 +46,7 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
         # The compiler/action closure is bound to the actual immutable source.
         for name in ("action.yml", "admission.py", "README.md"):
             path = ".github/actions/admit-incus-profile/" + name
-            exact = subprocess.check_output(["git", "show", "b3cba6b39c3dccf344af5868f6281266d0f8f74d:" + path], cwd=ROOT)
+            exact = subprocess.check_output(["git", "show", "3fec83c07621cb84bf29d7f3b1fcf817f2fd2a5f:" + path], cwd=ROOT)
             self.assertEqual(exact, (ROOT / path).read_bytes())
 
     def test_actual_contract_admits_main_receiver_and_denies_untrusted_context(self):
@@ -59,6 +59,19 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
                            ("CALLER_ATTEMPT", "2"), ("SOURCE_SHA", "main")]:
             with self.subTest(key=key, value=value):
                 self.assertNotEqual(self.invoke(**{key: value}), 0)
+
+    def test_direct_collection_main_uses_the_same_compiled_worker_boundary(self):
+        from test_incus_admission_compiler import ADMISSION, supplementary_environment
+        for actor in ("litroc", "litdeg"):
+            for profile in ("heavy", "application_acceptance"):
+                with self.subTest(actor=actor, profile=profile):
+                    environment = supplementary_environment(profile, actor)
+                    selected, canonical = ADMISSION.admit(environment)
+                    self.assertEqual(selected, profile)
+                    self.assertEqual(json.loads(canonical), json.loads(environment["MATRIX_JSON"]))
+                    for event in ("pull_request", "pull_request_target", "workflow_dispatch"):
+                        with self.assertRaises(ValueError):
+                            ADMISSION.admit({**environment, "CALLER_EVENT": event})
 
     def test_fixed_group_cannot_be_replaced_by_matrix_runner_or_environment(self):
         jobs = self.workflow["jobs"]

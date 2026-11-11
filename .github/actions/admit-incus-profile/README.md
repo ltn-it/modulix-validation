@@ -23,3 +23,18 @@ inputs. Compatibility with an older protected Main container row does not prove
 G06 VM acceptance: G06's pending physical profile rows and both Root-prepared
 cells must remain VMs. The installed runtime action and its independent native
 identity, ownership, expiry and lifecycle checks are unchanged.
+
+The hosted check accepts two complete GitHub caller identities. The existing
+MLX90 Main dispatch uses the release App and an `mlx90-candidate-<request-id>`
+artifact. The direct Supplementary route uses a protected Main push through
+`collection-ci.yml` in repository `1103407173`, attempt one, with `litroc`
+(`76040632`) or `litdeg` (`247824904`) as the User actor and the same triggering
+login. Its source SHA equals the GitHub caller SHA, and its artifact is exactly
+`collection-candidate-<source-sha>`. Both routes use the same matrix compiler
+and fixed limits. Mixed caller fields and a caller-supplied mode grant no route.
+
+The additional context comes from GitHub expressions in the immutable action,
+not from action inputs. Hosted compilation binds the workflow path. The
+installed Root runtime independently verifies the actual run and workflow ID
+(`214182490` for Supplementary), both native actor identities, OIDC claims,
+Runner01 identity, and the private policy before admitting a cell.

@@ -46,6 +46,22 @@ CALLER = {
     "MEMORY_LIMIT": "12GiB",
     "DISK_LIMIT": "24GiB",
 }
+SUPPLEMENTARY_CALLER = {
+    "CALLER_REPOSITORY": "ltn-it/ansible-collection-supplementary",
+    "CALLER_REPOSITORY_ID": "1103407173",
+    "CALLER_REPOSITORY_OWNER_ID": "54334171",
+    "CALLER_EVENT": "push",
+    "CALLER_REF": "refs/heads/main",
+    "CALLER_REF_PROTECTED": "true",
+    "CALLER_WORKFLOW_REF": "ltn-it/ansible-collection-supplementary/.github/workflows/collection-ci.yml@refs/heads/main",
+    "CALLER_ACTOR_TYPE": "User",
+    "CALLER_ATTEMPT": "1",
+    "SOURCE_REPOSITORY": "ltn-it/ansible-collection-supplementary",
+    "CPU_LIMIT": "4",
+    "MEMORY_LIMIT": "12GiB",
+    "DISK_LIMIT": "24GiB",
+}
+SUPPLEMENTARY_ACTORS = (("litroc", "76040632"), ("litdeg", "247824904"))
 
 
 class Refused(ValueError):
@@ -150,20 +166,32 @@ def compile_matrix(raw, profile):
 
 
 def admit(environment):
-    require(
-        all(environment.get(key) == value for key, value in CALLER.items()),
-        "caller-or-pilot-binding",
+    # Only complete trusted GitHub identities select a domain. No workflow
+    # input or matrix field chooses the caller policy.
+    receiver = all(environment.get(key) == value for key, value in CALLER.items())
+    supplementary = (
+        all(
+            environment.get(key) == value for key, value in SUPPLEMENTARY_CALLER.items()
+        )
+        and any(
+            environment.get("CALLER_ACTOR") == login
+            and environment.get("CALLER_ACTOR_ID") == actor_id
+            and environment.get("CALLER_TRIGGERING_ACTOR") == login
+            for login, actor_id in SUPPLEMENTARY_ACTORS
+        )
+        and environment.get("CALLER_SHA") == environment.get("SOURCE_SHA")
     )
+    require(receiver or supplementary, "caller-or-pilot-binding")
     profile = environment.get("PROFILE")
     require(profile in ("heavy", "application_acceptance"), "profile")
     require(
         text(environment.get("SOURCE_SHA"), re.compile(r"[0-9a-f]{40}")), "source-sha"
     )
+    artifact = environment.get("CANDIDATE_ARTIFACT")
     require(
-        text(
-            environment.get("CANDIDATE_ARTIFACT"),
-            re.compile(r"mlx90-candidate-[0-9a-f]{64}"),
-        ),
+        text(artifact, re.compile(r"mlx90-candidate-[0-9a-f]{64}"))
+        if receiver
+        else artifact == "collection-candidate-" + environment["SOURCE_SHA"],
         "candidate-artifact",
     )
     return profile, compile_matrix(environment.get("MATRIX_JSON"), profile)
