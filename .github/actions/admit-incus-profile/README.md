@@ -3,7 +3,7 @@
 This immutable action owns hosted caller admission and the scheduling matrix
 schema. It runs only its own `admission.py` in the digest-pinned Devtools image,
 read-only, offline, non-root, without candidate checkout, credentials or a
-service socket. Validation completes before either output is emitted.
+service socket. Validation completes before any output is emitted.
 
 The consumer must pin this action's real commit and use its canonical
 `matrix-json` output for `strategy.matrix`; the raw input is never scheduled.
@@ -23,3 +23,39 @@ inputs. Compatibility with an older protected Main container row does not prove
 G06 VM acceptance: G06's pending physical profile rows and both Root-prepared
 cells must remain VMs. The installed runtime action and its independent native
 identity, ownership, expiry and lifecycle checks are unchanged.
+
+The hosted check accepts two complete GitHub caller identities. The existing
+MLX90 Main dispatch uses the release App and an `mlx90-candidate-<request-id>`
+artifact. The direct Supplementary route uses a protected Main push through
+`collection-ci.yml` in repository `1103407173`, attempt one, with `litroc`
+(`76040632`) or `litdeg` (`247824904`) as the User actor and the same triggering
+login. Its source SHA equals the GitHub caller SHA, and its artifact is exactly
+`collection-candidate-<source-sha>`. Both routes use the same matrix compiler
+and fixed limits. Mixed caller fields and a caller-supplied mode grant no route.
+
+The additional context comes from GitHub expressions in the immutable action,
+not from action inputs. Hosted compilation binds the workflow path. The
+installed Root runtime independently verifies the actual run and workflow ID
+(`214182490` for Supplementary), both native actor identities, OIDC claims,
+Runner01 identity, and the private policy before admitting a cell.
+
+The compiler also derives `worker-group` from that fully validated caller:
+the original Validation domain retains `lit-pis-prd-isolated`, while direct
+Supplementary uses only `lit-pis-prd-supplementary-isolated`. A matrix label,
+environment variable or workflow input cannot choose a different group.
+
+The additional `operating` profile is not a business matrix. It requires the
+complete direct Source identity, the initial Main push whose `before` value is
+`90e7216b5d085ca4ac6238e44dcdbaa51e847d5f`, an empty include matrix, and exactly
+one of `failure`, `broker-cancel`, or `expiry-controller-loss`. Ordinary profiles
+reject a nonempty operating case, and the original receiver cannot enter this
+domain. Root independently verifies the actual Source commit's first parent;
+the caller condition alone grants no operating lease. Later ordinary Main
+deliveries do not repeat these four-hour negative cases.
+
+Operating resources are prepared by Root, outside the caller's business limits:
+one CPU, 2 GiB RAM, 5 GiB root and 500 MiB VM state within a 6 GiB VM budget.
+The exact cached 4 GiB Ubuntu image is journaled and copied into the owned
+project before execution; the complete project reserves 10 GiB. Actual physical
+and retained reservations still gate every case. The ordinary two business
+profiles remain at 4 CPU, 12 GiB RAM and 24 GiB disk.

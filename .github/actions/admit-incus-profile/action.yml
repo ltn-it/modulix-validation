@@ -2,6 +2,10 @@
 name: Compile protected Incus profile admission
 description: Validate caller identity and compile a closed typed matrix before worker scheduling.
 inputs:
+  operating-case:
+    description: Closed operating case; ordinary business profiles require the empty value.
+    required: false
+    default: ""
   profile:
     required: true
     description: Heavy or Application Acceptance profile.
@@ -33,6 +37,12 @@ outputs:
   matrix-json:
     value: ${{ steps.compile.outputs.matrix-json }}
     description: Canonical include-only typed matrix; sole scheduling input.
+  worker-group:
+    value: ${{ steps.compile.outputs.worker-group }}
+    description: Closed runner group derived from the fully admitted native caller.
+  operating-case:
+    value: ${{ steps.compile.outputs.operating-case }}
+    description: Verified operating case, empty for ordinary business profiles.
 runs:
   using: composite
   steps:
@@ -42,6 +52,7 @@ runs:
       env:
         ADMISSION_ACTION_PATH: ${{ github.action_path }}
         PROFILE: ${{ inputs.profile }}
+        OPERATING_CASE: ${{ inputs.operating-case }}
         MATRIX_JSON: ${{ inputs.matrix-json }}
         SOURCE_SHA: ${{ inputs.source-sha }}
         SOURCE_REPOSITORY: ${{ inputs.source-repository }}
@@ -51,11 +62,16 @@ runs:
         DISK_LIMIT: ${{ inputs.disk-limit }}
         CALLER_REPOSITORY: ${{ github.repository }}
         CALLER_REPOSITORY_ID: ${{ github.repository_id }}
+        CALLER_REPOSITORY_OWNER_ID: ${{ github.repository_owner_id }}
         CALLER_EVENT: ${{ github.event_name }}
         CALLER_REF: ${{ github.ref }}
+        CALLER_REF_PROTECTED: ${{ github.ref_protected }}
+        CALLER_SHA: ${{ github.sha }}
+        CALLER_BEFORE: ${{ github.event.before }}
         CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
         CALLER_ACTOR: ${{ github.actor }}
         CALLER_ACTOR_ID: ${{ github.actor_id }}
+        CALLER_ACTOR_TYPE: ${{ github.event.sender.type }}
         CALLER_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
         CALLER_ATTEMPT: ${{ github.run_attempt }}
       run: |
@@ -66,10 +82,11 @@ runs:
           --user 1000:1000 --cap-drop ALL --security-opt no-new-privileges=true \
           --pids-limit 128 --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
           -v "$ADMISSION_ACTION_PATH:/admission:ro" \
-          -e PROFILE -e MATRIX_JSON -e SOURCE_SHA -e SOURCE_REPOSITORY \
+          -e PROFILE -e OPERATING_CASE -e MATRIX_JSON -e SOURCE_SHA -e SOURCE_REPOSITORY \
           -e CANDIDATE_ARTIFACT -e CPU_LIMIT -e MEMORY_LIMIT -e DISK_LIMIT \
           -e CALLER_REPOSITORY -e CALLER_REPOSITORY_ID -e CALLER_EVENT -e CALLER_REF \
-          -e CALLER_WORKFLOW_REF -e CALLER_ACTOR -e CALLER_ACTOR_ID \
+          -e CALLER_REPOSITORY_OWNER_ID -e CALLER_REF_PROTECTED -e CALLER_SHA -e CALLER_BEFORE \
+          -e CALLER_WORKFLOW_REF -e CALLER_ACTOR -e CALLER_ACTOR_ID -e CALLER_ACTOR_TYPE \
           -e CALLER_TRIGGERING_ACTOR -e CALLER_ATTEMPT \
           quay.io/l-it/ee-wunder-devtools-ubi9:v1.18.2@sha256:58955457d3410706520f34fa7ea9823d5650aa4844c562cd5c0107024d825711 \
           python3 /admission/admission.py >> "$GITHUB_OUTPUT"

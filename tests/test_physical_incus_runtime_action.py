@@ -67,8 +67,44 @@ class PhysicalRuntimeActionTests(unittest.TestCase):
         self.assertEqual(upload['with']['if-no-files-found'], 'error')
         final = self.steps[-1]
         self.assertEqual(final['if'], 'always()')
-        for cell, artifact, expected in [('success', 'success', 0), ('failure', 'success', 1),
-                                         ('success', 'failure', 1), ('cancelled', 'skipped', 1)]:
+        for cell, artifact, recorded, state, expected in [
+            ('success', 'success', 'success', 'awaiting-native-end', 0),
+            ('failure', 'success', 'success', 'awaiting-native-end', 1),
+            ('success', 'failure', 'skipped', 'awaiting-native-end', 1),
+            ('success', 'success', 'failure', 'awaiting-native-end', 1),
+            ('success', 'success', 'success', 'closed', 1),
+            ('cancelled', 'skipped', 'skipped', '', 1),
+        ]:
             result = subprocess.run(['bash', '-c', final['run']], capture_output=True,
-                env=dict(os.environ, CELL_OUTCOME=cell, UPLOAD_OUTCOME=artifact), timeout=10)
+                env=dict(os.environ, CELL_OUTCOME=cell, UPLOAD_OUTCOME=artifact,
+                         RECORD_OUTCOME=recorded, EXECUTION_STATE=state), timeout=10)
             self.assertEqual(result.returncode, expected)
+
+    def test_upload_is_bound_to_the_same_cell_before_native_end(self):
+        record = next(step for step in self.steps if step.get('id') == 'record-upload')
+        self.assertEqual(record['if'], "always() && steps.upload.outcome == 'success'")
+        self.assertIn(CLIENT + ' record-upload', record['run'])
+        self.assertIn('--artifact-id "$ARTIFACT_ID"', record['run'])
+        self.assertIn('--artifact-digest "sha256:$ARTIFACT_DIGEST"', record['run'])
+        self.assertEqual(record['env']['ARTIFACT_ID'], '${{ steps.upload.outputs.artifact-id }}')
+        self.assertEqual(record['env']['ARTIFACT_DIGEST'], '${{ steps.upload.outputs.artifact-digest }}')
+
+
+class FinalQualityObserverTests(unittest.TestCase):
+    def test_observer_has_only_fixed_read_operation_and_single_receipt_publication(self):
+        action = yaml.safe_load((ACTION.parent.parent / 'observe-incus-runtime-profile/action.yml').read_text())
+        self.assertEqual(set(action['inputs']), {'profile', 'scenario', 'target'})
+        observe = next(step for step in action['runs']['steps'] if step.get('id') == 'observe')
+        self.assertIn(CLIENT + ' observe-profile', observe['run'])
+        for forbidden in ('run-profile', 'record-upload', 'sudo ', 'continue-on-error', '--lease-id'):
+            self.assertNotIn(forbidden, json.dumps(action))
+        upload = next(step for step in action['runs']['steps'] if step.get('id') == 'upload')
+        self.assertEqual(upload['with']['path'], '${{ steps.observe.outputs.final-quality-receipt }}')
+        self.assertEqual(upload['with']['name'], '${{ steps.observe.outputs.final-quality-artifact }}')
+        self.assertEqual(upload['with']['if-no-files-found'], 'error')
+        final = action['runs']['steps'][-1]
+        for outcome, upload_outcome, code in [('success', 'success', 0), ('failure', 'success', 1),
+                                               ('success', 'failure', 1), ('skipped', 'skipped', 1)]:
+            result = subprocess.run(['bash', '-c', final['run']], check=False,
+                env={**os.environ, 'OBSERVE_OUTCOME': outcome, 'UPLOAD_OUTCOME': upload_outcome})
+            self.assertEqual(result.returncode, code)

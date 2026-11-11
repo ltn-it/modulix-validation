@@ -230,11 +230,15 @@ cleanup after runner loss.
 
 ## Isolated Heavy worker routing candidate
 
-The separate reusable `collection-quality-profile-isolated.yml` admits only the
-Validation Main candidate receiver, its native release App actor and original
-triggering actor, `workflow_dispatch`, and attempt one. PRs, fork repositories,
-other workflows, branch substitutions and human reruns fail in hosted validation
-before any self-hosted worker is scheduled. The complete admission contract
+The separate reusable `collection-quality-profile-isolated.yml` accepts two
+complete caller identities. The Validation Main receiver uses its release App
+actor and triggering actor, `workflow_dispatch`, and attempt one. The direct
+Supplementary route uses its protected Main `collection-ci.yml` push, attempt
+one, and `litroc` or `litdeg` with the matching actor ID and triggering login.
+Its source SHA must equal the GitHub caller SHA, and the candidate name must be
+`collection-candidate-<source-sha>`. Both routes use the same closed matrix and
+fixed resource limits. PRs, forks, mixed caller fields, branch substitutions and
+reruns fail in hosted validation before a worker is scheduled. The complete admission contract
 is compiled by the immutable `admit-incus-profile` action inside digest-pinned
 Devtools on the hosted runner, offline and read-only. Only the action's own
 public compiler directory is mounted; no candidate checkout, credentials or

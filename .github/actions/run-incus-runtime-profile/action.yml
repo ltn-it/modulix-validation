@@ -92,13 +92,37 @@ runs:
         if-no-files-found: error
         retention-days: 30
 
-    - name: Require actual execution and artifact upload success
+    - name: Bind the actual preliminary upload before the execution job ends
+      id: record-upload
+      if: always() && steps.upload.outcome == 'success'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        QUALITY_INPUT_PROFILE: ${{ inputs.profile }}
+        QUALITY_INPUT_SCENARIO: ${{ inputs.scenario }}
+        QUALITY_INPUT_TARGET: ${{ inputs.target }}
+        ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+        ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+      run: |
+        set -euo pipefail
+        exec /usr/libexec/lightning-it/incus-runtime-client record-upload \
+          --profile "$QUALITY_INPUT_PROFILE" \
+          --scenario "$QUALITY_INPUT_SCENARIO" \
+          --target "$QUALITY_INPUT_TARGET" \
+          --artifact-id "$ARTIFACT_ID" \
+          --artifact-digest "sha256:$ARTIFACT_DIGEST"
+
+    - name: Require execution and bound preliminary upload without claiming final quality
       if: always()
       shell: bash
       env:
         CELL_OUTCOME: ${{ steps.cell.outcome }}
         UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+        RECORD_OUTCOME: ${{ steps.record-upload.outcome }}
+        EXECUTION_STATE: ${{ steps.cell.outputs.execution-state }}
       run: |
         set -euo pipefail
         test "$CELL_OUTCOME" = success
         test "$UPLOAD_OUTCOME" = success
+        test "$RECORD_OUTCOME" = success
+        test "$EXECUTION_STATE" = awaiting-native-end

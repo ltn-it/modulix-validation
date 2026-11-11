@@ -171,7 +171,7 @@ class QualityCancellationTests(unittest.TestCase):
                       damaged_environment=False, normal_failure=False,
                       repeat_during_stop=False, interrupt_capture=False,
                       interrupt_after_destroy=False, unowned_finalizer=False,
-                      result_artifact="fixture-result"):
+                      result_artifact="fixture-result", root_custody=False):
         root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         cell = root / "cell"
         cell.mkdir(mode=0o700)
@@ -254,6 +254,8 @@ class QualityCancellationTests(unittest.TestCase):
         process = subprocess.Popen(
             [sys.executable, "-c", program], cwd=root,
             env={**os.environ, "FIXTURE_ROOT": str(root), "FIXTURE_CELL": str(cell),
+                 **({"QUALITY_INCUS_RUNTIME_SCHEMA": "2", "QUALITY_FAILURE_CUSTODY": "retain-failed-v1"}
+                    if root_custody else {}),
                  "GITHUB_REPOSITORY": "ltn-it/modulix-validation", "GITHUB_WORKFLOW": "fixture",
                  "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "1", "QUALITY_INCUS_PROJECT": "fixture"},
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True,

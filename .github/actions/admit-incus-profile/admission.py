@@ -9,6 +9,8 @@ import sys
 
 MAX_BYTES = 65536
 MAX_CELLS = 256
+OPERATING_CASES = ("failure", "broker-cancel", "expiry-controller-loss")
+OPERATING_BEFORE = "90e7216b5d085ca4ac6238e44dcdbaa51e847d5f"
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,62}")
 ROLE = re.compile(r"[a-z][a-z0-9_]{0,62}")
 IMAGE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,511}")
@@ -46,6 +48,22 @@ CALLER = {
     "MEMORY_LIMIT": "12GiB",
     "DISK_LIMIT": "24GiB",
 }
+SUPPLEMENTARY_CALLER = {
+    "CALLER_REPOSITORY": "ltn-it/ansible-collection-supplementary",
+    "CALLER_REPOSITORY_ID": "1103407173",
+    "CALLER_REPOSITORY_OWNER_ID": "54334171",
+    "CALLER_EVENT": "push",
+    "CALLER_REF": "refs/heads/main",
+    "CALLER_REF_PROTECTED": "true",
+    "CALLER_WORKFLOW_REF": "ltn-it/ansible-collection-supplementary/.github/workflows/collection-ci.yml@refs/heads/main",
+    "CALLER_ACTOR_TYPE": "User",
+    "CALLER_ATTEMPT": "1",
+    "SOURCE_REPOSITORY": "ltn-it/ansible-collection-supplementary",
+    "CPU_LIMIT": "4",
+    "MEMORY_LIMIT": "12GiB",
+    "DISK_LIMIT": "24GiB",
+}
+SUPPLEMENTARY_ACTORS = (("litroc", "76040632"), ("litdeg", "247824904"))
 
 
 class Refused(ValueError):
@@ -150,35 +168,79 @@ def compile_matrix(raw, profile):
 
 
 def admit(environment):
-    require(
-        all(environment.get(key) == value for key, value in CALLER.items()),
-        "caller-or-pilot-binding",
+    # Only complete trusted GitHub identities select a domain. No workflow
+    # input or matrix field chooses the caller policy.
+    receiver = all(environment.get(key) == value for key, value in CALLER.items())
+    supplementary = (
+        all(
+            environment.get(key) == value for key, value in SUPPLEMENTARY_CALLER.items()
+        )
+        and any(
+            environment.get("CALLER_ACTOR") == login
+            and environment.get("CALLER_ACTOR_ID") == actor_id
+            and environment.get("CALLER_TRIGGERING_ACTOR") == login
+            for login, actor_id in SUPPLEMENTARY_ACTORS
+        )
+        and environment.get("CALLER_SHA") == environment.get("SOURCE_SHA")
     )
+    require(receiver or supplementary, "caller-or-pilot-binding")
     profile = environment.get("PROFILE")
-    require(profile in ("heavy", "application_acceptance"), "profile")
     require(
         text(environment.get("SOURCE_SHA"), re.compile(r"[0-9a-f]{40}")), "source-sha"
     )
+    artifact = environment.get("CANDIDATE_ARTIFACT")
     require(
-        text(
-            environment.get("CANDIDATE_ARTIFACT"),
-            re.compile(r"mlx90-candidate-[0-9a-f]{64}"),
-        ),
+        text(artifact, re.compile(r"mlx90-candidate-[0-9a-f]{64}"))
+        if receiver
+        else artifact == "collection-candidate-" + environment["SOURCE_SHA"],
         "candidate-artifact",
     )
+    case = environment.get("OPERATING_CASE", "")
+    require(isinstance(case, str), "operating-case-type")
+    if profile == "operating":
+        require(supplementary and not receiver and case in OPERATING_CASES,
+                "operating-source-case")
+        require(environment.get("CALLER_BEFORE") == OPERATING_BEFORE, "operating-first-main-transition")
+        raw = environment.get("MATRIX_JSON")
+        require(isinstance(raw, str) and 0 < len(raw.encode("utf-8")) <= MAX_BYTES,
+                "operating-matrix-bound")
+        matrix = json.loads(raw, object_pairs_hook=unique, parse_constant=nonfinite)
+        require(matrix == {"include": []}, "operating-no-business-matrix")
+        return profile, '{"include":[]}'
+    require(profile in ("heavy", "application_acceptance") and case == "", "profile")
     return profile, compile_matrix(environment.get("MATRIX_JSON"), profile)
+
+
+def worker_group(environment):
+    """Derive capacity only after the entire native admission has succeeded."""
+    admit(environment)
+    return (
+        "lit-pis-prd-supplementary-isolated"
+        if environment["CALLER_REPOSITORY"] == SUPPLEMENTARY_CALLER["CALLER_REPOSITORY"]
+        else "lit-pis-prd-isolated"
+    )
+
+
+def operating_case(environment):
+    """An operating test is never a business-cell role or quality result."""
+    profile, _ = admit(environment)
+    return environment["OPERATING_CASE"] if profile == "operating" else ""
 
 
 def main():
     try:
         require(len(sys.argv) == 1, "closed-argv")
         profile, matrix = admit(os.environ)
+        group = worker_group(os.environ)
+        case = operating_case(os.environ)
     except (ValueError, TypeError, UnicodeError, RecursionError):
         print("Incus admission refused", file=sys.stderr)
         return 2
     # No output is produced until the complete identity and every cell validate.
     print("profile=" + profile)
     print("matrix-json=" + matrix)
+    print("worker-group=" + group)
+    print("operating-case=" + case)
     return 0
 
 
