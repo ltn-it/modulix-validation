@@ -1,0 +1,42 @@
+---
+name: Execute one admitted operating case
+description: Test actual failure handling through the installed broker, without business quality acceptance.
+inputs:
+  case:
+    required: true
+    description: Closed hosted-admitted operating case.
+runs:
+  using: composite
+  steps:
+    - name: Check the installed operating broker client
+      shell: bash
+      run: /usr/libexec/lightning-it/incus-runtime-client check
+    - name: Execute and assert the actual negative operating case
+      id: operating
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        OPERATING_CASE: ${{ inputs.case }}
+      run: |
+        set -euo pipefail
+        exec /usr/libexec/lightning-it/incus-runtime-client run-operating --case "$OPERATING_CASE"
+    - name: Publish the verified preterminal safety proof
+      id: upload
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+      with:
+        name: ${{ steps.operating.outputs.operating-artifact }}
+        path: ${{ steps.operating.outputs.operating-receipt }}
+        if-no-files-found: error
+        retention-days: 30
+    - name: Require actual negative assertions and safety publication
+      if: always()
+      shell: bash
+      env:
+        OPERATING_OUTCOME: ${{ steps.operating.outcome }}
+        OPERATING_STATE: ${{ steps.operating.outputs.operating-state }}
+        UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+      run: |
+        set -euo pipefail
+        test "$OPERATING_OUTCOME" = success
+        test "$OPERATING_STATE" = safety-proved-retention-armed
+        test "$UPLOAD_OUTCOME" = success

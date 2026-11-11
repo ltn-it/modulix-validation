@@ -274,6 +274,7 @@ def private_values(path: Path, *, environment: bool = False) -> dict[str, str]:
                 "QUALITY_EFFECTIVE_GID",
                 "QUALITY_INCUS_PROJECT",
                 "QUALITY_INCUS_RUNTIME_SCHEMA",
+                "QUALITY_FAILURE_CUSTODY",
                 "MOLECULE_INCUS_TRANSPORT",
                 "MOLECULE_INCUS_REMOTE",
                 "MOLECULE_INCUS_PROJECT",
@@ -312,6 +313,7 @@ def run_steps(
     workspace: Path,
 ):
     """Preserve normal step failure and unconditional finalizers inside one container."""
+    root_finalization = root_owned_finalization(environment)
     results = {}
     failed = False
     environment_file = control / "environment"
@@ -330,6 +332,12 @@ def run_steps(
             identity = step["id"]
             always = step.get("if") == "always()"
             cancelled = cancellation.signum is not None
+            if identity == "destroy" and root_finalization:
+                # Even a successful test may fail during evidence/package or
+                # native upload. Only Root can observe the terminal native job
+                # and decide destruction versus four-hour failure custody.
+                results[identity] = {"outcome": "pending", "outputs": {"root_finalization": "pending"}}
+                continue
             if (failed and not always) or (cancelled and (not always or identity not in OWNED_FINALIZERS)):
                 results[identity] = {"outcome": "skipped", "outputs": {}}
                 continue
@@ -345,6 +353,8 @@ def run_steps(
             local = {**admitted_environment, "GITHUB_ENV": str(environment_file), "GITHUB_OUTPUT": str(output)}
             try:
                 for key, value in step.get("env", {}).items():
+                    if key in {"QUALITY_FAILURE_CUSTODY", "QUALITY_INCUS_RUNTIME_SCHEMA"}:
+                        raise ValueError("cell step cannot override Root custody")
                     local[key] = expand(str(value), inputs, results)
                 command = expand(step["run"], inputs, results)
                 cancelled = cancellation.signum is not None
@@ -365,6 +375,22 @@ def run_steps(
         if cancellation.signum:
             raise CellCancelled(cancellation.signum, results)
     return results
+
+
+def root_owned_finalization(environment):
+    """The Root-sealed engine environment is authenticated by its policy JWS.
+
+    This is not a caller input. Root excludes caller environment, signs the
+    exact engine/custody policy digests and admits the read-only controller.
+    """
+    directive = environment.get("QUALITY_FAILURE_CUSTODY")
+    if environment.get("QUALITY_INCUS_RUNTIME_SCHEMA") == "2":
+        if directive != "retain-failed-v1":
+            raise ValueError("physical cell requires Root failure custody")
+        return True
+    if directive is not None:
+        raise ValueError("Root failure custody requires the physical context")
+    return False
 
 
 def finalizers_confirmed(results):
@@ -390,7 +416,8 @@ def finish_owned_state(cell, inputs, environment, results, *, cancelled):
     # existing private lifecycle and diagnostic paths remain in place.
     payload = {
         "schema": 1,
-        "status": "teardown-unconfirmed",
+        "status": ("awaiting-root-finalization" if results.get("destroy", {}).get("outcome") == "pending"
+                   else "teardown-unconfirmed"),
         "cancelled": cancelled,
         "repository": environment.get("GITHUB_REPOSITORY"),
         "workflow": environment.get("GITHUB_WORKFLOW"),
@@ -424,13 +451,18 @@ def execute_owned_cell(steps, inputs, environment, control, workspace, cell):
         finish_owned_state(cell, inputs, environment, {}, cancelled=True)
         raise
     finish_owned_state(cell, inputs, environment, results, cancelled=False)
-    codes = (("molecule", "exit_code"), ("cleanup", "exit_code"),
-             ("destroy", "exit_code"), ("evidence", "exit_code"))
-    success = all(result["outcome"] == "success" for result in results.values())
+    pending = root_owned_finalization(environment)
+    codes = (("molecule", "exit_code"), ("cleanup", "exit_code"), ("evidence", "exit_code"))
+    if not pending:
+        codes += (("destroy", "exit_code"),)
+    success = all(result["outcome"] == "success" for name, result in results.items()
+                  if not (pending and name == "destroy"))
     success &= all(results[name]["outputs"].get(key) == "0" for name, key in codes)
     final_environment = private_values(control / "environment", environment=True)
     publication = {"schema": 1, "result_artifact": final_environment.get("QUALITY_RESULT_ARTIFACT", ""),
-                   "package_directory": "/quality/package", "success": success}
+                   "package_directory": "/quality/package", "success": success and not pending}
+    if pending:
+        publication.update({"execution_success": success, "root_finalization": "pending"})
     result_root = cell / "control"
     result_root.mkdir(mode=0o700)
     (result_root / "result.json").write_text(json.dumps(publication, sort_keys=True) + "\n")

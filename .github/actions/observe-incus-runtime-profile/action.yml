@@ -1,0 +1,51 @@
+---
+name: Observe Root-finalized Incus quality
+description: Read the original cell receipt after its execution job ended; no new lease or VM effects.
+inputs:
+  profile:
+    required: true
+    description: Original quality profile.
+  scenario:
+    required: true
+    description: Original scenario.
+  target:
+    required: true
+    description: Original target.
+runs:
+  using: composite
+  steps:
+    - name: Verify installed Root runtime interface
+      shell: bash
+      run: /usr/libexec/lightning-it/incus-runtime-client check
+    - name: Read the independently finalized original cell receipt
+      id: observe
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        QUALITY_INPUT_PROFILE: ${{ inputs.profile }}
+        QUALITY_INPUT_SCENARIO: ${{ inputs.scenario }}
+        QUALITY_INPUT_TARGET: ${{ inputs.target }}
+      run: |
+        set -euo pipefail
+        exec /usr/libexec/lightning-it/incus-runtime-client observe-profile \
+          --profile "$QUALITY_INPUT_PROFILE" \
+          --scenario "$QUALITY_INPUT_SCENARIO" \
+          --target "$QUALITY_INPUT_TARGET"
+    - name: Upload the verified Root final receipt
+      id: upload
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+      with:
+        name: ${{ steps.observe.outputs.final-quality-artifact }}
+        path: ${{ steps.observe.outputs.final-quality-receipt }}
+        if-no-files-found: error
+        retention-days: 30
+    - name: Require final Root proof and its actual publication
+      if: always()
+      shell: bash
+      env:
+        OBSERVE_OUTCOME: ${{ steps.observe.outcome }}
+        UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+      run: |
+        set -euo pipefail
+        test "$OBSERVE_OUTCOME" = success
+        test "$UPLOAD_OUTCOME" = success

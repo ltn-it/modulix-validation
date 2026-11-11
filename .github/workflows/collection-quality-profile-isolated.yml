@@ -5,6 +5,11 @@ name: Isolated collection infrastructure quality profile
 on:
   workflow_call:
     inputs:
+      operating-case:
+        description: Reserved operating case; empty for the ordinary business profiles.
+        required: false
+        default: ""
+        type: string
       profile:
         description: Heavy or Application Acceptance profile to execute.
         required: true
@@ -44,6 +49,7 @@ on:
 
 permissions:
   contents: read
+  checks: read
 
 jobs:
   validate-inputs:
@@ -53,11 +59,14 @@ jobs:
     outputs:
       profile: ${{ steps.contract.outputs.profile }}
       matrix-json: ${{ steps.contract.outputs.matrix-json }}
+      worker-group: ${{ steps.contract.outputs.worker-group }}
+      operating-case: ${{ steps.contract.outputs.operating-case }}
     steps:
       - id: contract
         name: Compile canonical protected profile admission
-        uses: ltn-it/modulix-validation/.github/actions/admit-incus-profile@3fec83c07621cb84bf29d7f3b1fcf817f2fd2a5f
+        uses: ltn-it/modulix-validation/.github/actions/admit-incus-profile@48ea1fc7c85eb8029515d3be71c39e724435bb21
         with:
+          operating-case: ${{ inputs['operating-case'] }}
           profile: ${{ inputs.profile }}
           matrix-json: ${{ inputs['matrix-json'] }}
           source-sha: ${{ inputs['source-sha'] }}
@@ -70,12 +79,13 @@ jobs:
   profile-cells:
     name: ${{ inputs.profile }} / ${{ matrix.scenario }} / ${{ matrix.target }}
     needs: validate-inputs
+    if: needs.validate-inputs.outputs.profile != 'operating'
     strategy:
       fail-fast: false
       max-parallel: 1
       matrix: ${{ fromJSON(needs.validate-inputs.outputs.matrix-json) }}
     runs-on:
-      group: lit-pis-prd-isolated
+      group: ${{ needs.validate-inputs.outputs.worker-group }}
       labels:
         - self-hosted
         - linux
@@ -99,11 +109,12 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: read
+      checks: read
       actions: read
       id-token: write
     steps:
       - name: Run prepared Incus cell through the installed host runtime
-        uses: ltn-it/modulix-validation/.github/actions/run-incus-runtime-profile@dd1b8859b30b5e40b1d166ee25c8e5e5f4113675
+        uses: ltn-it/modulix-validation/.github/actions/run-incus-runtime-profile@48ea1fc7c85eb8029515d3be71c39e724435bb21
         with:
           profile: ${{ needs.validate-inputs.outputs.profile }}
           scenario: ${{ matrix.scenario }}
@@ -119,3 +130,114 @@ jobs:
           cpu-limit: ${{ inputs['cpu-limit'] }}
           memory-limit: ${{ inputs['memory-limit'] }}
           disk-limit: ${{ inputs['disk-limit'] }}
+
+  profile-results:
+    name: Final quality / ${{ inputs.profile }} / ${{ matrix.scenario }} / ${{ matrix.target }}
+    needs: [validate-inputs, profile-cells]
+    if: >-
+      always() && needs.validate-inputs.result == 'success' &&
+      (needs.validate-inputs.outputs.profile == 'heavy' ||
+      needs.validate-inputs.outputs.profile == 'application_acceptance')
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix: ${{ fromJSON(needs.validate-inputs.outputs.matrix-json) }}
+    runs-on:
+      group: ${{ needs.validate-inputs.outputs.worker-group }}
+      labels:
+        - self-hosted
+        - linux
+        - x64
+        - lit-pis
+        - prd
+        - isolated
+        - ciwkr01
+    environment:
+      name: heavy-isolated-pilot
+    timeout-minutes: 90
+    concurrency:
+      group: >-
+        modulix-validation-final-${{ github.repository_id }}-${{ github.run_id }}-${{
+        github.run_attempt }}-${{ inputs.profile }}-${{ matrix.scenario }}-${{
+        matrix.target }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      checks: read
+      actions: read
+      id-token: write
+    steps:
+      - name: Observe the original cell only after its execution job ended
+        uses: ltn-it/modulix-validation/.github/actions/observe-incus-runtime-profile@48ea1fc7c85eb8029515d3be71c39e724435bb21
+        with:
+          profile: ${{ needs.validate-inputs.outputs.profile }}
+          scenario: ${{ matrix.scenario }}
+          target: ${{ matrix.target }}
+
+  operating-cell:
+    name: Operating custody / ${{ needs.validate-inputs.outputs.operating-case }}
+    needs: validate-inputs
+    if: needs.validate-inputs.outputs.profile == 'operating'
+    runs-on:
+      group: ${{ needs.validate-inputs.outputs.worker-group }}
+      labels:
+        - self-hosted
+        - linux
+        - x64
+        - lit-pis
+        - prd
+        - isolated
+        - ciwkr01
+    environment:
+      name: heavy-isolated-pilot
+    timeout-minutes: 15
+    concurrency:
+      group: >-
+        modulix-validation-operating-${{ github.repository_id }}-${{ github.run_id }}-${{
+        github.run_attempt }}-${{ needs.validate-inputs.outputs.operating-case }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      checks: read
+      actions: read
+      id-token: write
+    steps:
+      - name: Assert actual failure handling through the Root broker
+        uses: ltn-it/modulix-validation/.github/actions/run-operating-drill@48ea1fc7c85eb8029515d3be71c39e724435bb21
+        with:
+          case: ${{ needs.validate-inputs.outputs.operating-case }}
+
+  operating-results:
+    name: Operating result / ${{ needs.validate-inputs.outputs.operating-case }}
+    needs: [validate-inputs, operating-cell]
+    if: >-
+      always() && needs.validate-inputs.result == 'success' &&
+      needs.validate-inputs.outputs.profile == 'operating'
+    runs-on:
+      group: ${{ needs.validate-inputs.outputs.worker-group }}
+      labels:
+        - self-hosted
+        - linux
+        - x64
+        - lit-pis
+        - prd
+        - isolated
+        - ciwkr01
+    environment:
+      name: heavy-isolated-pilot
+    timeout-minutes: 15
+    concurrency:
+      group: >-
+        modulix-validation-operating-result-${{ github.repository_id }}-${{ github.run_id }}-${{
+        github.run_attempt }}-${{ needs.validate-inputs.outputs.operating-case }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      checks: read
+      actions: read
+      id-token: write
+    steps:
+      - name: Verify original custody after the real execution job ends
+        uses: ltn-it/modulix-validation/.github/actions/observe-operating-drill@48ea1fc7c85eb8029515d3be71c39e724435bb21
+        with:
+          case: ${{ needs.validate-inputs.outputs.operating-case }}

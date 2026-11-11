@@ -665,20 +665,30 @@ steps:
       TEST_RC: ${{ steps.molecule.outputs.exit_code }}
       CLEANUP_RC: ${{ steps.cleanup.outputs.exit_code }}
       DESTROY_RC: ${{ steps.destroy.outputs.exit_code }}
+      ROOT_FINALIZATION: ${{ steps.destroy.outputs.root_finalization }}
     run: |
       set -euo pipefail
       test_rc="${TEST_RC:-1}"
       cleanup_rc="${CLEANUP_RC:-1}"
       destroy_rc="${DESTROY_RC:-1}"
+      root_pending=false
+      if [ "${ROOT_FINALIZATION:-}" = pending ]; then
+        test "${QUALITY_FAILURE_CUSTODY:-}" = retain-failed-v1
+        test "${QUALITY_INCUS_RUNTIME_SCHEMA:-}" = 2
+        test -z "${DESTROY_RC:-}"
+        root_pending=true
+      else
+        test -z "${ROOT_FINALIZATION:-}"
+      fi
       effective_rc="$test_rc"
       if [ "$effective_rc" -eq 0 ] && [ "$cleanup_rc" -ne 0 ]; then
         effective_rc="$cleanup_rc"
       fi
-      if [ "$effective_rc" -eq 0 ] && [ "$destroy_rc" -ne 0 ]; then
+      if [ "$root_pending" = false ] && [ "$effective_rc" -eq 0 ] && [ "$destroy_rc" -ne 0 ]; then
         effective_rc="$destroy_rc"
       fi
       infrastructure_error=false
-      if [ "$cleanup_rc" -ne 0 ] || [ "$destroy_rc" -ne 0 ]; then
+      if [ "$cleanup_rc" -ne 0 ] || { [ "$root_pending" = false ] && [ "$destroy_rc" -ne 0 ]; }; then
         infrastructure_error=true
       fi
 
@@ -687,6 +697,7 @@ steps:
       TEST_RC="$test_rc" \
         CLEANUP_RC="$cleanup_rc" \
         DESTROY_RC="$destroy_rc" \
+        ROOT_PENDING="$root_pending" \
         EFFECTIVE_RC="$effective_rc" \
         INFRASTRUCTURE_ERROR="$infrastructure_error" \
         python3 - <<'PY'
@@ -701,10 +712,12 @@ steps:
           "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
           "test_exit_code": int(os.environ["TEST_RC"]),
           "capture_exit_code": int(os.environ["CLEANUP_RC"]),
-          "destroy_exit_code": int(os.environ["DESTROY_RC"]),
+          "destroy_exit_code": None if os.environ["ROOT_PENDING"] == "true" else int(os.environ["DESTROY_RC"]),
           "effective_exit_code": int(os.environ["EFFECTIVE_RC"]),
           "infrastructure_error": os.environ["INFRASTRUCTURE_ERROR"] == "true",
       }
+      if os.environ["ROOT_PENDING"] == "true":
+          payload["root_finalization"] = "pending"
       Path(os.environ["QUALITY_ARTIFACT_ROOT"]).joinpath(
           "configuration", "lifecycle-result.json"
       ).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -712,7 +725,12 @@ steps:
       {
         echo "lifecycle.test_exit_code=$test_rc"
         echo "lifecycle.capture_exit_code=$cleanup_rc"
-        echo "lifecycle.destroy_exit_code=$destroy_rc"
+        if [ "$root_pending" = true ]; then
+          echo "lifecycle.destroy_exit_code=null"
+          echo "lifecycle.root_finalization=pending"
+        else
+          echo "lifecycle.destroy_exit_code=$destroy_rc"
+        fi
         echo "lifecycle.infrastructure_error=$infrastructure_error"
       } >> "$QUALITY_LOG_PATH"
       echo "effective_exit_code=$effective_rc" >> "$GITHUB_OUTPUT"
@@ -854,6 +872,11 @@ steps:
       if [ "$QUALITY_TARGET_DISPOSITION" = candidate ]; then
         evidence_mode=candidate
       fi
+      custody_args=()
+      if [ "${QUALITY_INCUS_RUNTIME_SCHEMA:-}" = 2 ]; then
+        test "${QUALITY_FAILURE_CUSTODY:-}" = retain-failed-v1 || exit 1
+        custody_args+=(--preliminary)
+      fi
       python3 scripts/quality_evidence.py assemble \
         --root "$QUALITY_CELL_ROOT" \
         --input-root "$QUALITY_ARTIFACT_ROOT" \
@@ -864,13 +887,14 @@ steps:
         --target "$QUALITY_TARGET" \
         --run-attempt "$GITHUB_RUN_ATTEMPT" \
         --mode "$evidence_mode" \
-        --expected-commit "$QUALITY_SOURCE_SHA"
+        --expected-commit "$QUALITY_SOURCE_SHA" \
+        "${custody_args[@]}"
       evidence_rc="$?"
       set -e
       echo "exit_code=$evidence_rc" >> "$GITHUB_OUTPUT"
       exit 0
 
-  - name: Package redacted evidence after owned destruction
+  - name: Package redacted execution evidence
     id: package
     if: always()
     shell: bash
