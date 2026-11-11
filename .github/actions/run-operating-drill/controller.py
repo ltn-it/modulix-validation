@@ -68,7 +68,7 @@ def spec_from_environment(environment):
 
 def source_create_variables(spec):
     """Reuse the verified Source provider, without any business role/scenario."""
-    scenario = "operating-" + spec["case"]
+    scenario = "g06-operating-" + spec["case"]
     return {"molecule_yml": {
         "scenario": {"name": scenario},
         "platforms": [{
@@ -102,7 +102,7 @@ def raw_frame(spec, environment, instance, *, code=None, signal=None):
         "root_finalization": "pending"}
 
 
-def controller_sha(binding):
+def admission_claims(binding):
     """Project Root-verified admission identity, not a job-supplied SHA.
 
     Root verifies the JWS and exact engine/custody digests before launch; this
@@ -112,12 +112,19 @@ def controller_sha(binding):
     require(isinstance(token, str) and len(token) <= 16384 and token.count(".") == 2, "operating-admission")
     encoded = token.split(".")[1]
     payload = decode(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode("utf-8"))
+    require(isinstance(payload, dict) and isinstance(payload.get("identity"), dict), "operating-admission-shape")
     sha = payload.get("identity", {}).get("reusable_sha")
     require(isinstance(sha, str) and re.fullmatch(r"[a-f0-9]{40}", sha), "operating-controller-sha")
-    return sha
+    require(isinstance(payload.get("lease_id"), str) and re.fullmatch(r"[a-f0-9]{32}", payload["lease_id"]),
+            "operating-admission-lease")
+    return payload
 
 
-def read_ready(path, case, uuid):
+def controller_sha(binding):
+    return admission_claims(binding)["identity"]["reusable_sha"]
+
+
+def read_ready(path, case, uuid, lease_id):
     """A one-time synchronization marker, never an authorization grant."""
     before = path.lstat()
     require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and before.st_size <= 4096
@@ -138,7 +145,8 @@ def read_ready(path, case, uuid):
             and type(value["schema"]) is int and value["schema"] == 1
             and value["state"] == "operating-ready" and value["case"] == case
             and value["instance_uuid"] == uuid and isinstance(value["lease_id"], str)
-            and re.fullmatch(r"[a-f0-9]{32}", value["lease_id"]), "operating-ready-binding")
+            and re.fullmatch(r"[a-f0-9]{32}", value["lease_id"]) and value["lease_id"] == lease_id,
+            "operating-ready-binding")
     return value
 
 
@@ -152,6 +160,8 @@ def main():
     require(Path("/quality").is_dir() and os.access("/quality", os.W_OK), "operating-output")
     marker = Path("/quality/control/root-operating-ready.json")
     require(not marker.exists() and not marker.is_symlink(), "operating-ready-preexisting")
+    created_hint = marker.parent / "operating-created.json"
+    require(not created_hint.exists() and not created_hint.is_symlink(), "operating-create-hint-preexisting")
     helper_path = Path("/workspace/molecule/shared/incus/helpers/tls_transport.py")
     require(helper_path.is_file() and not helper_path.is_symlink(), "operating-verified-source-helper")
     module_spec = importlib.util.spec_from_file_location("operating_source_tls", helper_path)
@@ -160,7 +170,8 @@ def main():
     module_spec.loader.exec_module(transport)
     binding, tls, _ = transport.load_context(Path("/incus"), repository=environment["GITHUB_REPOSITORY"],
         run_id=environment["GITHUB_RUN_ID"], attempt="1", now=datetime.now(timezone.utc))
-    environment["QUALITY_CONTROLLER_SHA"] = controller_sha(binding)
+    claims = admission_claims(binding)
+    environment["QUALITY_CONTROLLER_SHA"] = claims["identity"]["reusable_sha"]
     owner = binding["runtime"]["bridge"]["owner"]
     private = Path("/tmp/wunder/operating-private")
     private.mkdir(mode=0o700)
@@ -178,15 +189,24 @@ def main():
     value = transport.Client(binding, tls).get("/1.0/instances/" + spec["instance_name"])
     require(value.get("name") == spec["instance_name"] and value.get("type") == "virtual-machine"
             and value.get("status") == "Running"
-            and value.get("config", {}).get("user.lit-molecule-owner") == owner, "operating-owned-running-vm")
+            and value.get("config", {}).get("user.lit-molecule-owner") == owner
+            and value.get("config", {}).get("volatile.base_image") == spec["image"], "operating-owned-running-vm")
     instance = {"name": spec["instance_name"], "uuid": value["config"].get("volatile.uuid"), "state": "Running"}
+    require(isinstance(instance["uuid"], str)
+            and re.fullmatch(r"[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}", instance["uuid"]),
+            "operating-instance-uuid")
+    marker.parent.mkdir(mode=0o700, exist_ok=True)
+    with created_hint.open("x", encoding="utf-8") as stream:
+        json.dump({"schema": 1, "case": spec["case"], "instance_name": spec["instance_name"],
+                   "instance_uuid": instance["uuid"]}, stream, sort_keys=True)
+        stream.write("\n")
     # Root must first double-read and durably bind this actual VM before the
     # failure case exits; the marker prevents a create/exit readiness race.
     deadline = time.monotonic() + 120
     while not marker.exists():
         require(time.monotonic() < deadline, "operating-root-ready-timeout")
         time.sleep(0.1)
-    read_ready(marker, spec["case"], instance["uuid"])
+    read_ready(marker, spec["case"], instance["uuid"], claims["lease_id"])
     code = 23 if spec["case"] == "failure" else None
     with Path("/quality/operating-result.json").open("x", encoding="utf-8") as stream:
         json.dump(raw_frame(spec, environment, instance, code=code), stream, sort_keys=True)

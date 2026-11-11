@@ -32,6 +32,7 @@ class OperatingControllerTests(unittest.TestCase):
             self.assertEqual(platform["type"], "vm")
             self.assertEqual(platform["image"], "quality:" + CONTROLLER.IMAGE)
             self.assertEqual(platform["resources"], {"cpu": "1", "memory": "2GiB", "disk": "5GiB"})
+            self.assertEqual(platform["identity"], {"scenario": "g06-operating-" + case, "target": "ubuntu-24.04"})
             self.assertNotIn("roles", json.dumps(platform))
             self.assertEqual(CONTROLLER.SOURCE_CREATE, "/workspace/molecule/shared/incus/create.yml")
 
@@ -67,19 +68,19 @@ class OperatingControllerTests(unittest.TestCase):
                      "lease_id": "a" * 32, "instance_uuid": uuid}
             path.write_text(json.dumps(value))
             path.chmod(0o600)
-            self.assertEqual(CONTROLLER.read_ready(path, "failure", uuid), value)
+            self.assertEqual(CONTROLLER.read_ready(path, "failure", uuid, "a" * 32), value)
             for changed in ({"case": "broker-cancel"}, {"schema": True}, {"instance_uuid": "other"},
-                            {"caller_accept": True}):
+                            {"caller_accept": True}, {"lease_id": "b" * 32}):
                 path.write_text(json.dumps(value | changed))
                 with self.subTest(changed=changed), self.assertRaises(ValueError):
-                    CONTROLLER.read_ready(path, "failure", uuid)
+                    CONTROLLER.read_ready(path, "failure", uuid, "a" * 32)
             path.unlink()
             path.symlink_to(Path(directory) / "absent")
             with self.assertRaises((ValueError, OSError)):
-                CONTROLLER.read_ready(path, "failure", uuid)
+                CONTROLLER.read_ready(path, "failure", uuid, "a" * 32)
 
     def test_controller_sha_is_existing_root_admission_projection_not_job_input(self):
-        payload = base64.urlsafe_b64encode(json.dumps({"identity": {"reusable_sha": "c" * 40}}).encode()).decode().rstrip("=")
+        payload = base64.urlsafe_b64encode(json.dumps({"identity": {"reusable_sha": "c" * 40}, "lease_id": "a" * 32}).encode()).decode().rstrip("=")
         self.assertEqual(CONTROLLER.controller_sha({"admission": "header." + payload + ".signature"}), "c" * 40)
         for value in ("", "caller-value", "header.e30.signature"):
             with self.subTest(value=value), self.assertRaises((ValueError, TypeError)):
