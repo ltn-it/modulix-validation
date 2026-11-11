@@ -56,7 +56,7 @@ jobs:
     steps:
       - id: contract
         name: Compile canonical protected profile admission
-        uses: ltn-it/modulix-validation/.github/actions/admit-incus-profile@b3cba6b39c3dccf344af5868f6281266d0f8f74d
+        uses: ltn-it/modulix-validation/.github/actions/admit-incus-profile@3fec83c07621cb84bf29d7f3b1fcf817f2fd2a5f
         with:
           profile: ${{ inputs.profile }}
           matrix-json: ${{ inputs['matrix-json'] }}
