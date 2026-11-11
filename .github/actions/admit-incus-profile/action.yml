@@ -33,6 +33,9 @@ outputs:
   matrix-json:
     value: ${{ steps.compile.outputs.matrix-json }}
     description: Canonical include-only typed matrix; sole scheduling input.
+  worker-group:
+    value: ${{ steps.compile.outputs.worker-group }}
+    description: Closed runner group derived from the fully admitted native caller.
 runs:
   using: composite
   steps:

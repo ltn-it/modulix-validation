@@ -3,7 +3,7 @@
 This immutable action owns hosted caller admission and the scheduling matrix
 schema. It runs only its own `admission.py` in the digest-pinned Devtools image,
 read-only, offline, non-root, without candidate checkout, credentials or a
-service socket. Validation completes before either output is emitted.
+service socket. Validation completes before any output is emitted.
 
 The consumer must pin this action's real commit and use its canonical
 `matrix-json` output for `strategy.matrix`; the raw input is never scheduled.
@@ -38,3 +38,8 @@ not from action inputs. Hosted compilation binds the workflow path. The
 installed Root runtime independently verifies the actual run and workflow ID
 (`214182490` for Supplementary), both native actor identities, OIDC claims,
 Runner01 identity, and the private policy before admitting a cell.
+
+The compiler also derives `worker-group` from that fully validated caller:
+the original Validation domain retains `lit-pis-prd-isolated`, while direct
+Supplementary uses only `lit-pis-prd-supplementary-isolated`. A matrix label,
+environment variable or workflow input cannot choose a different group.

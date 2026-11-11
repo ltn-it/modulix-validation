@@ -197,16 +197,28 @@ def admit(environment):
     return profile, compile_matrix(environment.get("MATRIX_JSON"), profile)
 
 
+def worker_group(environment):
+    """Derive capacity only after the entire native admission has succeeded."""
+    admit(environment)
+    return (
+        "lit-pis-prd-supplementary-isolated"
+        if environment["CALLER_REPOSITORY"] == SUPPLEMENTARY_CALLER["CALLER_REPOSITORY"]
+        else "lit-pis-prd-isolated"
+    )
+
+
 def main():
     try:
         require(len(sys.argv) == 1, "closed-argv")
         profile, matrix = admit(os.environ)
+        group = worker_group(os.environ)
     except (ValueError, TypeError, UnicodeError, RecursionError):
         print("Incus admission refused", file=sys.stderr)
         return 2
     # No output is produced until the complete identity and every cell validate.
     print("profile=" + profile)
     print("matrix-json=" + matrix)
+    print("worker-group=" + group)
     return 0
 
 
