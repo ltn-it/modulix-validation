@@ -22,7 +22,7 @@ class PhysicalRuntimeActionTests(unittest.TestCase):
         self.assertEqual(set(self.action['inputs']), {'profile', 'scenario', 'target', 'target-disposition', 'roles', 'image',
             'instance-type', 'candidate-artifact', 'source-sha', 'junit-required', 'allure-required', 'cpu-limit', 'memory-limit', 'disk-limit'})
         self.assertEqual(self.action['runs']['using'], 'composite')
-        self.assertEqual(self.steps[0]['run'].strip().splitlines()[-1], CLIENT + ' check')
+        self.assertIn(CLIENT + ' check --require-capability initial-auth-idle-v1', self.steps[0]['run'])
         execution = next(step for step in self.steps if step.get('id') == 'cell')
         self.assertIn('exec ' + CLIENT + ' run-profile', execution['run'])
         expected = {'GITHUB_TOKEN': '${{ github.token }}'}
@@ -108,3 +108,44 @@ class FinalQualityObserverTests(unittest.TestCase):
             result = subprocess.run(['bash', '-c', final['run']], check=False,
                 env={**os.environ, 'OBSERVE_OUTCOME': outcome, 'UPLOAD_OUTCOME': upload_outcome})
             self.assertEqual(result.returncode, code)
+
+
+class InitialAuthenticationContractTests(unittest.TestCase):
+    RECORD = '{"authentication_idle_seconds":60,"capabilities":["initial-auth-idle-v1"],"frame_seconds":5,"operation":"check","schema":2,"state":"local-prerequisites-only"}'
+
+    def test_all_four_actual_preflights_require_and_validate_the_closed_local_record(self):
+        # Execute the actual action shell; only the installed fixed executable is
+        # replaced with a private fixture. This never asserts native admission.
+        actions = ('run-incus-runtime-profile', 'observe-incus-runtime-profile',
+                   'run-operating-drill', 'observe-operating-drill')
+        records = (('{"schema":2,"operation":"check","state":"local-prerequisites-only"}', 0, 1),
+                   (self.RECORD, 0, 0),
+                   (self.RECORD.replace('"frame_seconds":5', '"frame_seconds":60'), 0, 1),
+                   (self.RECORD.replace('"authentication_idle_seconds":60', '"authentication_idle_seconds":600'), 0, 1),
+                   (self.RECORD.replace('"schema":2', '"schema":true'), 0, 1),
+                   (self.RECORD.replace('"capabilities":["initial-auth-idle-v1"]', '"capabilities":[]'), 0, 1),
+                   (self.RECORD[:-1] + ',"ready":true}', 0, 1),
+                   (self.RECORD[:-1] + ',"schema":2}', 0, 1),
+                   (self.RECORD + ' trailing', 0, 1),
+                   (self.RECORD, 2, 1), ('', 0, 1))
+        for action_name in actions:
+            action = yaml.safe_load((ROOT / '.github/actions' / action_name / 'action.yml').read_text())
+            script = action['runs']['steps'][0]['run']
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory)
+                client = path / 'client'
+                capture = path / 'argv.json'
+                client.write_text('#!/usr/bin/env python3\nimport json,os,sys\nfrom pathlib import Path\n'
+                    'Path(os.environ["CAPTURE"]).write_text(json.dumps(sys.argv[1:]))\n'
+                    'print(os.environ["RECORD"])\nsys.exit(int(os.environ["RESULT"]))\n')
+                client.chmod(0o700)
+                for record, result, expected in records:
+                    with self.subTest(action=action_name, record=record, result=result):
+                        outcome = subprocess.run(['bash', '-c', script.replace(CLIENT, str(client))],
+                            env=dict(os.environ, CAPTURE=str(capture), RECORD=record, RESULT=str(result)),
+                            capture_output=True, text=True, timeout=10)
+                        self.assertEqual(outcome.returncode == 0, expected == 0, outcome.stderr)
+                        self.assertEqual(json.loads(capture.read_text()),
+                            ['check', '--require-capability', 'initial-auth-idle-v1'])
+                        if record:
+                            self.assertNotIn(record, outcome.stdout)

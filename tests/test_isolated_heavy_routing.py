@@ -30,7 +30,7 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
         self.assertEqual(len(admission["steps"]), 1)
         step = admission["steps"][0]
         self.assertEqual(step["uses"],
-                         "ltn-it/modulix-validation/.github/actions/admit-incus-profile@b28fb26df1bc8e7d7a0e0e6b3137e3434ab45afb")
+                         "ltn-it/modulix-validation/.github/actions/admit-incus-profile@4126ba6c0c3137d3970f8d26a36f5128ad8fd563")
         self.assertNotIn("run", step)
         self.assertNotIn("env", step)
         action = yaml.safe_load((ROOT / ".github/actions/admit-incus-profile/action.yml").read_text())
@@ -46,7 +46,7 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
         # The compiler/action closure is bound to the actual immutable source.
         for name in ("action.yml", "admission.py", "README.md"):
             path = ".github/actions/admit-incus-profile/" + name
-            exact = subprocess.check_output(["git", "show", "b28fb26df1bc8e7d7a0e0e6b3137e3434ab45afb:" + path], cwd=ROOT)
+            exact = subprocess.check_output(["git", "show", "4126ba6c0c3137d3970f8d26a36f5128ad8fd563:" + path], cwd=ROOT)
             self.assertEqual(exact, (ROOT / path).read_bytes())
 
     def test_actual_contract_admits_main_receiver_and_denies_untrusted_context(self):
@@ -111,13 +111,13 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
         self.assertEqual(observer["permissions"], {"contents": "read", "checks": "read", "actions": "read", "id-token": "write"})
         step = observer["steps"][0]
         self.assertEqual(step["uses"],
-            "ltn-it/modulix-validation/.github/actions/observe-incus-runtime-profile@b28fb26df1bc8e7d7a0e0e6b3137e3434ab45afb")
+            "ltn-it/modulix-validation/.github/actions/observe-incus-runtime-profile@4126ba6c0c3137d3970f8d26a36f5128ad8fd563")
         self.assertEqual(set(step["with"]), {"profile", "scenario", "target"})
         self.assertEqual(jobs["validate-inputs"]["outputs"]["worker-group"],
             "${{ steps.contract.outputs.worker-group }}")
         for action in ("run-incus-runtime-profile", "observe-incus-runtime-profile"):
             path = ".github/actions/" + action + "/action.yml"
-            exact = subprocess.check_output(["git", "show", "b28fb26df1bc8e7d7a0e0e6b3137e3434ab45afb:" + path], cwd=ROOT)
+            exact = subprocess.check_output(["git", "show", "4126ba6c0c3137d3970f8d26a36f5128ad8fd563:" + path], cwd=ROOT)
             self.assertEqual(exact, (ROOT / path).read_bytes())
 
     def test_validation_caller_cannot_bypass_group_admission_through_legacy_mode(self):
@@ -147,9 +147,9 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
             step = job["steps"][0]
             self.assertEqual(step["with"], {"case": "${{ needs.validate-inputs.outputs.operating-case }}"})
             self.assertEqual(step["uses"], "ltn-it/modulix-validation/.github/actions/" + action +
-                             "@b28fb26df1bc8e7d7a0e0e6b3137e3434ab45afb")
+                             "@4126ba6c0c3137d3970f8d26a36f5128ad8fd563")
             path = ".github/actions/" + action + "/action.yml"
-            exact = subprocess.check_output(["git", "show", "b28fb26df1bc8e7d7a0e0e6b3137e3434ab45afb:" + path], cwd=ROOT)
+            exact = subprocess.check_output(["git", "show", "4126ba6c0c3137d3970f8d26a36f5128ad8fd563:" + path], cwd=ROOT)
             self.assertEqual(exact, (ROOT / path).read_bytes())
         self.assertEqual(jobs["profile-cells"]["timeout-minutes"], 90)
         inputs = self.workflow["on"]["workflow_call"]["inputs"] if "on" in self.workflow else self.workflow[True]["workflow_call"]["inputs"]
