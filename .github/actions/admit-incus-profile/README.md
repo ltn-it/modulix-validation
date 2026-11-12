@@ -45,13 +45,17 @@ Supplementary uses only `lit-pis-prd-supplementary-isolated`. A matrix label,
 environment variable or workflow input cannot choose a different group.
 
 The additional `operating` profile is not a business matrix. It requires the
-complete direct Source identity, the initial Main push whose `before` value is
-`90e7216b5d085ca4ac6238e44dcdbaa51e847d5f`, an empty include matrix, and exactly
-one of `failure`, `broker-cancel`, or `expiry-controller-loss`. Ordinary profiles
-reject a nonempty operating case, and the original receiver cannot enter this
-domain. Root independently verifies the actual Source commit's first parent;
-the caller condition alone grants no operating lease. Later ordinary Main
-deliveries do not repeat these four-hour negative cases.
+complete direct Source identity, an empty include matrix, and exactly one of
+`failure`, `broker-cancel`, or `expiry-controller-loss`. The Main push `before`
+must be exactly the historical `90e7216b5d085ca4ac6238e44dcdbaa51e847d5f` or
+its approved functional follow-up `14e3abd5d1fa0cfad14d52ec83483b761de207f0`.
+This closed pair is not a generic retry or future-Main allowance. Original
+failures remain failures; no rerun, dispatch or attempt reset is admitted.
+Ordinary profiles reject a nonempty operating case, and the original receiver
+cannot enter this domain. Root independently verifies the genuine native job,
+commit parent and, for the follow-up, its separately approved exact continuation
+binding. The hosted caller condition alone grants no operating lease. Other
+later ordinary Main deliveries do not repeat these four-hour negative cases.
 
 Operating resources are prepared by Root, outside the caller's business limits:
 one CPU, 2 GiB RAM, 5 GiB root and 500 MiB VM state within a 6 GiB VM budget.
