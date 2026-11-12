@@ -47,9 +47,10 @@ environment variable or workflow input cannot choose a different group.
 The additional `operating` profile is not a business matrix. It requires the
 complete direct Source identity, an empty include matrix, and exactly one of
 `failure`, `broker-cancel`, or `expiry-controller-loss`. The Main push `before`
-must be exactly the historical `90e7216b5d085ca4ac6238e44dcdbaa51e847d5f` or
-its approved functional follow-up `14e3abd5d1fa0cfad14d52ec83483b761de207f0`.
-This closed pair is not a generic retry or future-Main allowance. Original
+must be exactly the historical `90e7216b5d085ca4ac6238e44dcdbaa51e847d5f`,
+its recorded follow-up `14e3abd5d1fa0cfad14d52ec83483b761de207f0`, or the
+client-protocol correction `f27c1d4edff75377f285275cec9bfec6bc3081f6`.
+This closed set is not a generic retry or future-Main allowance. Original
 failures remain failures; no rerun, dispatch or attempt reset is admitted.
 Ordinary profiles reject a nonempty operating case, and the original receiver
 cannot enter this domain. Root independently verifies the genuine native job,

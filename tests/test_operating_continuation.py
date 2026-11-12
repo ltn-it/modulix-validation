@@ -1,4 +1,4 @@
-"""Actual hosted compiler entry: two exact Source parents, no generic retry route.
+"""Actual hosted compiler entry: three exact Source parents, no generic retry route.
 
 GitHub-provided environment is modeled; no native assignment or Root grant is
 asserted. The unchanged Root verifier still independently qualifies every job.
@@ -13,6 +13,7 @@ from test_incus_admission_compiler import ACTION, supplementary_environment
 
 HISTORICAL = "90e7216b5d085ca4ac6238e44dcdbaa51e847d5f"
 FOLLOW_UP = "14e3abd5d1fa0cfad14d52ec83483b761de207f0"
+PREAUTH_FOLLOW_UP = "f27c1d4edff75377f285275cec9bfec6bc3081f6"
 CASES = ("failure", "broker-cancel", "expiry-controller-loss")
 
 
@@ -57,6 +58,9 @@ class OperatingContinuationEntryTests(unittest.TestCase):
     def test_exact_follow_up_parent_admits_both_actors_and_three_cases(self):
         self.assert_admitted(FOLLOW_UP)
 
+    def test_exact_preauth_follow_up_admits_both_actors_and_three_cases(self):
+        self.assert_admitted(PREAUTH_FOLLOW_UP)
+
     def test_follow_up_does_not_admit_neighboring_source_or_native_domains(self):
         changes = (
             ("CALLER_BEFORE", "0" * 40),
@@ -96,9 +100,9 @@ class OperatingContinuationEntryTests(unittest.TestCase):
                 self.assertEqual(result.stdout, "")
                 self.assertEqual(result.stderr, "Incus admission refused\n")
 
-    def test_both_existing_business_profiles_keep_the_same_routing(self):
+    def test_business_profiles_keep_the_same_routing_for_all_three_parents(self):
         for profile in ("heavy", "application_acceptance"):
-            for parent in (HISTORICAL, FOLLOW_UP):
+            for parent in (HISTORICAL, FOLLOW_UP, PREAUTH_FOLLOW_UP):
                 with self.subTest(profile=profile, parent=parent):
                     result = run_entry(
                         supplementary_environment(profile) | {"CALLER_BEFORE": parent}
