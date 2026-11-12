@@ -64,7 +64,7 @@ jobs:
     steps:
       - id: contract
         name: Compile canonical protected profile admission
-        uses: ltn-it/modulix-validation/.github/actions/admit-incus-profile@48ea1fc7c85eb8029515d3be71c39e724435bb21
+        uses: ltn-it/modulix-validation/.github/actions/admit-incus-profile@b28fb26df1bc8e7d7a0e0e6b3137e3434ab45afb
         with:
           operating-case: ${{ inputs['operating-case'] }}
           profile: ${{ inputs.profile }}
@@ -114,7 +114,7 @@ jobs:
       id-token: write
     steps:
       - name: Run prepared Incus cell through the installed host runtime
-        uses: ltn-it/modulix-validation/.github/actions/run-incus-runtime-profile@48ea1fc7c85eb8029515d3be71c39e724435bb21
+        uses: ltn-it/modulix-validation/.github/actions/run-incus-runtime-profile@b28fb26df1bc8e7d7a0e0e6b3137e3434ab45afb
         with:
           profile: ${{ needs.validate-inputs.outputs.profile }}
           scenario: ${{ matrix.scenario }}
@@ -168,7 +168,7 @@ jobs:
       id-token: write
     steps:
       - name: Observe the original cell only after its execution job ended
-        uses: ltn-it/modulix-validation/.github/actions/observe-incus-runtime-profile@48ea1fc7c85eb8029515d3be71c39e724435bb21
+        uses: ltn-it/modulix-validation/.github/actions/observe-incus-runtime-profile@b28fb26df1bc8e7d7a0e0e6b3137e3434ab45afb
         with:
           profile: ${{ needs.validate-inputs.outputs.profile }}
           scenario: ${{ matrix.scenario }}
@@ -203,7 +203,7 @@ jobs:
       id-token: write
     steps:
       - name: Assert actual failure handling through the Root broker
-        uses: ltn-it/modulix-validation/.github/actions/run-operating-drill@48ea1fc7c85eb8029515d3be71c39e724435bb21
+        uses: ltn-it/modulix-validation/.github/actions/run-operating-drill@b28fb26df1bc8e7d7a0e0e6b3137e3434ab45afb
         with:
           case: ${{ needs.validate-inputs.outputs.operating-case }}
 
@@ -238,6 +238,6 @@ jobs:
       id-token: write
     steps:
       - name: Verify original custody after the real execution job ends
-        uses: ltn-it/modulix-validation/.github/actions/observe-operating-drill@48ea1fc7c85eb8029515d3be71c39e724435bb21
+        uses: ltn-it/modulix-validation/.github/actions/observe-operating-drill@b28fb26df1bc8e7d7a0e0e6b3137e3434ab45afb
         with:
           case: ${{ needs.validate-inputs.outputs.operating-case }}
