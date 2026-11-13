@@ -3,6 +3,7 @@ from pathlib import Path
 import json
 import os
 import subprocess
+import sys
 import unittest
 import yaml
 
@@ -30,7 +31,7 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
         self.assertEqual(len(admission["steps"]), 1)
         step = admission["steps"][0]
         self.assertEqual(step["uses"],
-                         "ltn-it/modulix-validation/.github/actions/admit-incus-profile@4126ba6c0c3137d3970f8d26a36f5128ad8fd563")
+                         "ltn-it/modulix-validation/.github/actions/admit-incus-profile@83fd5f34b99d379ec4952bfc26243e8856f1e26f")
         self.assertNotIn("run", step)
         self.assertNotIn("env", step)
         action = yaml.safe_load((ROOT / ".github/actions/admit-incus-profile/action.yml").read_text())
@@ -46,8 +47,29 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
         # The compiler/action closure is bound to the actual immutable source.
         for name in ("action.yml", "admission.py", "README.md"):
             path = ".github/actions/admit-incus-profile/" + name
-            exact = subprocess.check_output(["git", "show", "4126ba6c0c3137d3970f8d26a36f5128ad8fd563:" + path], cwd=ROOT)
+            exact = subprocess.check_output(["git", "show", "83fd5f34b99d379ec4952bfc26243e8856f1e26f:" + path], cwd=ROOT)
             self.assertEqual(exact, (ROOT / path).read_bytes())
+
+    def test_actual_workflow_pin_executes_the_two_recorded_successor_admissions(self):
+        from test_operating_continuation import CASES, THIRD_FAILED, FOURTH_FAILED, operating
+        step = self.workflow["jobs"]["validate-inputs"]["steps"][0]
+        prefix = "ltn-it/modulix-validation/.github/actions/admit-incus-profile@"
+        self.assertTrue(step["uses"].startswith(prefix))
+        pin = step["uses"][len(prefix):]
+        self.assertRegex(pin, r"^[0-9a-f]{40}$")
+        subprocess.run(["git", "merge-base", "--is-ancestor", pin, "HEAD"], cwd=ROOT, check=True)
+        raw = subprocess.check_output(["git", "show", pin + ":.github/actions/admit-incus-profile/admission.py"], cwd=ROOT)
+        self.assertEqual(raw, (ROOT / ".github/actions/admit-incus-profile/admission.py").read_bytes())
+        for parent in (THIRD_FAILED, FOURTH_FAILED):
+            for actor in ("litroc", "litdeg"):
+                for case in CASES:
+                    with self.subTest(parent=parent, actor=actor, case=case):
+                        result = subprocess.run([sys.executable, "-I", "-B", "-c", raw.decode("utf-8")],
+                            env=operating(parent, actor, case), capture_output=True, text=True, timeout=10)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(result.stderr, "")
+                        self.assertEqual(result.stdout, "profile=operating\nmatrix-json={\"include\":[]}\n"
+                            "worker-group=lit-pis-prd-supplementary-isolated\noperating-case=" + case + "\n")
 
     def test_actual_contract_admits_main_receiver_and_denies_untrusted_context(self):
         self.assertEqual(self.invoke(), 0)

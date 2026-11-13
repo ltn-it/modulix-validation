@@ -1,4 +1,4 @@
-"""Actual hosted compiler entry: three exact Source parents, no generic retry route.
+"""Actual hosted compiler entry: five exact Source parents, no generic retry route.
 
 GitHub-provided environment is modeled; no native assignment or Root grant is
 asserted. The unchanged Root verifier still independently qualifies every job.
@@ -14,6 +14,9 @@ from test_incus_admission_compiler import ACTION, supplementary_environment
 HISTORICAL = "90e7216b5d085ca4ac6238e44dcdbaa51e847d5f"
 FOLLOW_UP = "14e3abd5d1fa0cfad14d52ec83483b761de207f0"
 PREAUTH_FOLLOW_UP = "f27c1d4edff75377f285275cec9bfec6bc3081f6"
+THIRD_FAILED = "3d84e26d90cc778fb8c4f462ce481584da57fb5a"
+FOURTH_FAILED = "f138a227d9eee41ea698b1a6f3b9a05f7ae3e18d"
+PARENTS = (HISTORICAL, FOLLOW_UP, PREAUTH_FOLLOW_UP, THIRD_FAILED, FOURTH_FAILED)
 CASES = ("failure", "broker-cancel", "expiry-controller-loss")
 
 
@@ -61,6 +64,12 @@ class OperatingContinuationEntryTests(unittest.TestCase):
     def test_exact_preauth_follow_up_admits_both_actors_and_three_cases(self):
         self.assert_admitted(PREAUTH_FOLLOW_UP)
 
+    def test_third_failed_predecessor_admits_both_actors_and_three_cases(self):
+        self.assert_admitted(THIRD_FAILED)
+
+    def test_fourth_failed_predecessor_admits_both_actors_and_three_cases(self):
+        self.assert_admitted(FOURTH_FAILED)
+
     def test_follow_up_does_not_admit_neighboring_source_or_native_domains(self):
         changes = (
             ("CALLER_BEFORE", "0" * 40),
@@ -93,16 +102,19 @@ class OperatingContinuationEntryTests(unittest.TestCase):
             ("OPERATING_CASE", "other"),
             ("MATRIX_JSON", '{"include":[],"retry":true}'),
         )
-        for key, value in changes:
-            with self.subTest(key=key, value=value):
-                result = run_entry(operating(FOLLOW_UP) | {key: value})
-                self.assertEqual(result.returncode, 2)
-                self.assertEqual(result.stdout, "")
-                self.assertEqual(result.stderr, "Incus admission refused\n")
+        changes += tuple(("CALLER_BEFORE", value) for parent in (THIRD_FAILED, FOURTH_FAILED)
+                         for value in (parent.upper(), parent[:-1], parent + "0", " " + parent))
+        for parent in PARENTS:
+            for key, value in changes:
+                with self.subTest(parent=parent, key=key, value=value):
+                    result = run_entry(operating(parent) | {key: value})
+                    self.assertEqual(result.returncode, 2)
+                    self.assertEqual(result.stdout, "")
+                    self.assertEqual(result.stderr, "Incus admission refused\n")
 
-    def test_business_profiles_keep_the_same_routing_for_all_three_parents(self):
+    def test_business_profiles_keep_the_same_routing_for_all_five_parents(self):
         for profile in ("heavy", "application_acceptance"):
-            for parent in (HISTORICAL, FOLLOW_UP, PREAUTH_FOLLOW_UP):
+            for parent in PARENTS:
                 with self.subTest(profile=profile, parent=parent):
                     result = run_entry(
                         supplementary_environment(profile) | {"CALLER_BEFORE": parent}

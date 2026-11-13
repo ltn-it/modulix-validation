@@ -48,8 +48,10 @@ The additional `operating` profile is not a business matrix. It requires the
 complete direct Source identity, an empty include matrix, and exactly one of
 `failure`, `broker-cancel`, or `expiry-controller-loss`. The Main push `before`
 must be exactly the historical `90e7216b5d085ca4ac6238e44dcdbaa51e847d5f`,
-its recorded follow-up `14e3abd5d1fa0cfad14d52ec83483b761de207f0`, or the
-client-protocol correction `f27c1d4edff75377f285275cec9bfec6bc3081f6`.
+its recorded follow-up `14e3abd5d1fa0cfad14d52ec83483b761de207f0`, the
+client-protocol correction `f27c1d4edff75377f285275cec9bfec6bc3081f6`, or the
+recorded failed successors `3d84e26d90cc778fb8c4f462ce481584da57fb5a` and
+`f138a227d9eee41ea698b1a6f3b9a05f7ae3e18d`.
 This closed set is not a generic retry or future-Main allowance. Original
 failures remain failures; no rerun, dispatch or attempt reset is admitted.
 Ordinary profiles reject a nonempty operating case, and the original receiver
@@ -64,3 +66,10 @@ The exact cached 4 GiB Ubuntu image is journaled and copied into the owned
 project before execution; the complete project reserves 10 GiB. Actual physical
 and retained reservations still gate every case. The ordinary two business
 profiles remain at 4 CPU, 12 GiB RAM and 24 GiB disk.
+
+## Admission change record
+
+2026-11-13: retain the two additional exact failed Main predecessors in hosted
+admission and bind the workflow to the immutable action containing this list.
+The action grants scheduling eligibility only; actual Root admission, original
+attempts, retained failure histories, resource limits and deadlines are unchanged.
