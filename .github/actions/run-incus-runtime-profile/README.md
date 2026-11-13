@@ -37,3 +37,13 @@ outcome or grant another lease.
 This contract does not establish deployment, real-host acceptance or successful
 four-hour watchdog/mail delivery. Those require the actual installed Root ABI,
 protected native execution and later operating receipts.
+
+The four installed-client execution and observer preflights require
+`check --require-capability initial-auth-idle-v1` and the exact canonical local
+record: authentication idle allowance 60 seconds, frame bound 5 seconds. An older
+client or another response fails before requesting work. This is a local client
+interface check, not evidence that Root authentication or its collector is healthy.
+The accepted package, actual host readiness and full authentication budget remain
+independent requirements. Both failed original Main runs remain evidence; a new
+functional Source transition requires an exact Root-bound continuation, never an
+attempt-two rerun or a deadline reset.

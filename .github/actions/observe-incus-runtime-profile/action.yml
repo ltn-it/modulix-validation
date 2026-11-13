@@ -16,7 +16,17 @@ runs:
   steps:
     - name: Verify installed Root runtime interface
       shell: bash
-      run: /usr/libexec/lightning-it/incus-runtime-client check
+      run: |
+        set -euo pipefail
+        runtime_contract="$(/usr/libexec/lightning-it/incus-runtime-client check --require-capability initial-auth-idle-v1)"
+        # The installed CLI emits this closed canonical record. Do not accept a
+        # legacy local check, extra fields, duplicate keys or a remote-health claim.
+        expected_contract='{"authentication_idle_seconds":60,"capabilities":["initial-auth-idle-v1"],'
+        expected_contract+='"frame_seconds":5,"operation":"check","schema":2,"state":"local-prerequisites-only"}'
+        if [[ "$runtime_contract" != "$expected_contract" ]]; then
+          echo 'Installed Root client authentication-wait contract is unavailable.' >&2
+          exit 1
+        fi
     - name: Read the independently finalized original cell receipt
       id: observe
       shell: bash
