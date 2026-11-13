@@ -13,6 +13,8 @@ OPERATING_CASES = ("failure", "broker-cancel", "expiry-controller-loss")
 OPERATING_BEFORE = "90e7216b5d085ca4ac6238e44dcdbaa51e847d5f"
 OPERATING_CONTINUATION_BEFORE = "14e3abd5d1fa0cfad14d52ec83483b761de207f0"
 OPERATING_PREAUTH_BEFORE = "f27c1d4edff75377f285275cec9bfec6bc3081f6"
+OPERATING_THIRD_BEFORE = "3d84e26d90cc778fb8c4f462ce481584da57fb5a"
+OPERATING_FOURTH_BEFORE = "f138a227d9eee41ea698b1a6f3b9a05f7ae3e18d"
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,62}")
 ROLE = re.compile(r"[a-z][a-z0-9_]{0,62}")
 IMAGE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,511}")
@@ -202,11 +204,12 @@ def admit(environment):
     if profile == "operating":
         require(supplementary and not receiver and case in OPERATING_CASES,
                 "operating-source-case")
-        # Scheduling retains both failed transitions and one exact protocol follow-up.
+        # Scheduling retains all four failed transitions and the initial boundary.
         # Root admission still independently binds the genuine job and continuation.
         require(
             environment.get("CALLER_BEFORE")
-            in (OPERATING_BEFORE, OPERATING_CONTINUATION_BEFORE, OPERATING_PREAUTH_BEFORE),
+            in (OPERATING_BEFORE, OPERATING_CONTINUATION_BEFORE, OPERATING_PREAUTH_BEFORE,
+                OPERATING_THIRD_BEFORE, OPERATING_FOURTH_BEFORE),
             "operating-first-main-transition",
         )
         raw = environment.get("MATRIX_JSON")
