@@ -31,7 +31,7 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
         self.assertEqual(len(admission["steps"]), 1)
         step = admission["steps"][0]
         self.assertEqual(step["uses"],
-                         "ltn-it/modulix-validation/.github/actions/admit-incus-profile@83fd5f34b99d379ec4952bfc26243e8856f1e26f")
+                         "ltn-it/modulix-validation/.github/actions/admit-incus-profile@1a54ca9eac589912f54317d828aa2dca22dd6de5")
         self.assertNotIn("run", step)
         self.assertNotIn("env", step)
         action = yaml.safe_load((ROOT / ".github/actions/admit-incus-profile/action.yml").read_text())
@@ -47,11 +47,11 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
         # The compiler/action closure is bound to the actual immutable source.
         for name in ("action.yml", "admission.py", "README.md"):
             path = ".github/actions/admit-incus-profile/" + name
-            exact = subprocess.check_output(["git", "show", "83fd5f34b99d379ec4952bfc26243e8856f1e26f:" + path], cwd=ROOT)
+            exact = subprocess.check_output(["git", "show", "1a54ca9eac589912f54317d828aa2dca22dd6de5:" + path], cwd=ROOT)
             self.assertEqual(exact, (ROOT / path).read_bytes())
 
-    def test_actual_workflow_pin_executes_the_two_recorded_successor_admissions(self):
-        from test_operating_continuation import CASES, THIRD_FAILED, FOURTH_FAILED, operating
+    def test_actual_workflow_pin_executes_the_recorded_successor_admissions(self):
+        from test_operating_continuation import CASES, THIRD_FAILED, FOURTH_FAILED, FIFTH_FAILED_WITH_EFFECTS, operating
         step = self.workflow["jobs"]["validate-inputs"]["steps"][0]
         prefix = "ltn-it/modulix-validation/.github/actions/admit-incus-profile@"
         self.assertTrue(step["uses"].startswith(prefix))
@@ -60,7 +60,7 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
         subprocess.run(["git", "merge-base", "--is-ancestor", pin, "HEAD"], cwd=ROOT, check=True)
         raw = subprocess.check_output(["git", "show", pin + ":.github/actions/admit-incus-profile/admission.py"], cwd=ROOT)
         self.assertEqual(raw, (ROOT / ".github/actions/admit-incus-profile/admission.py").read_bytes())
-        for parent in (THIRD_FAILED, FOURTH_FAILED):
+        for parent in (THIRD_FAILED, FOURTH_FAILED, FIFTH_FAILED_WITH_EFFECTS):
             for actor in ("litroc", "litdeg"):
                 for case in CASES:
                     with self.subTest(parent=parent, actor=actor, case=case):

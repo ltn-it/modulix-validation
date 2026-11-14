@@ -1,4 +1,4 @@
-"""Actual hosted compiler entry: five exact Source parents, no generic retry route.
+"""Actual hosted compiler entry: six exact Source parents, no generic retry route.
 
 GitHub-provided environment is modeled; no native assignment or Root grant is
 asserted. The unchanged Root verifier still independently qualifies every job.
@@ -16,7 +16,8 @@ FOLLOW_UP = "14e3abd5d1fa0cfad14d52ec83483b761de207f0"
 PREAUTH_FOLLOW_UP = "f27c1d4edff75377f285275cec9bfec6bc3081f6"
 THIRD_FAILED = "3d84e26d90cc778fb8c4f462ce481584da57fb5a"
 FOURTH_FAILED = "f138a227d9eee41ea698b1a6f3b9a05f7ae3e18d"
-PARENTS = (HISTORICAL, FOLLOW_UP, PREAUTH_FOLLOW_UP, THIRD_FAILED, FOURTH_FAILED)
+FIFTH_FAILED_WITH_EFFECTS = "8926e7f535f158d4af89e4ac68149ff0b8ab740d"
+PARENTS = (HISTORICAL, FOLLOW_UP, PREAUTH_FOLLOW_UP, THIRD_FAILED, FOURTH_FAILED, FIFTH_FAILED_WITH_EFFECTS)
 CASES = ("failure", "broker-cancel", "expiry-controller-loss")
 
 
@@ -70,6 +71,11 @@ class OperatingContinuationEntryTests(unittest.TestCase):
     def test_fourth_failed_predecessor_admits_both_actors_and_three_cases(self):
         self.assert_admitted(FOURTH_FAILED)
 
+    def test_fifth_failed_with_effects_predecessor_admits_both_actors_and_three_cases(self):
+        # Scheduling only: Root independently proves cleanup and custody.
+        # No no-work classification or same-run retry authority is introduced.
+        self.assert_admitted(FIFTH_FAILED_WITH_EFFECTS)
+
     def test_follow_up_does_not_admit_neighboring_source_or_native_domains(self):
         changes = (
             ("CALLER_BEFORE", "0" * 40),
@@ -102,7 +108,7 @@ class OperatingContinuationEntryTests(unittest.TestCase):
             ("OPERATING_CASE", "other"),
             ("MATRIX_JSON", '{"include":[],"retry":true}'),
         )
-        changes += tuple(("CALLER_BEFORE", value) for parent in (THIRD_FAILED, FOURTH_FAILED)
+        changes += tuple(("CALLER_BEFORE", value) for parent in (THIRD_FAILED, FOURTH_FAILED, FIFTH_FAILED_WITH_EFFECTS)
                          for value in (parent.upper(), parent[:-1], parent + "0", " " + parent))
         for parent in PARENTS:
             for key, value in changes:
@@ -112,7 +118,7 @@ class OperatingContinuationEntryTests(unittest.TestCase):
                     self.assertEqual(result.stdout, "")
                     self.assertEqual(result.stderr, "Incus admission refused\n")
 
-    def test_business_profiles_keep_the_same_routing_for_all_five_parents(self):
+    def test_business_profiles_keep_the_same_routing_for_all_six_parents(self):
         for profile in ("heavy", "application_acceptance"):
             for parent in PARENTS:
                 with self.subTest(profile=profile, parent=parent):
