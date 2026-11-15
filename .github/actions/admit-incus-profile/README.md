@@ -51,7 +51,8 @@ must be exactly the historical `90e7216b5d085ca4ac6238e44dcdbaa51e847d5f`,
 its recorded follow-up `14e3abd5d1fa0cfad14d52ec83483b761de207f0`, the
 client-protocol correction `f27c1d4edff75377f285275cec9bfec6bc3081f6`, or the
 recorded failed successors `3d84e26d90cc778fb8c4f462ce481584da57fb5a` and
-`f138a227d9eee41ea698b1a6f3b9a05f7ae3e18d`.
+`f138a227d9eee41ea698b1a6f3b9a05f7ae3e18d`, plus the failed-with-effects
+predecessor `8926e7f535f158d4af89e4ac68149ff0b8ab740d`.
 This closed set is not a generic retry or future-Main allowance. Original
 failures remain failures; no rerun, dispatch or attempt reset is admitted.
 Ordinary profiles reject a nonempty operating case, and the original receiver
@@ -73,3 +74,9 @@ profiles remain at 4 CPU, 12 GiB RAM and 24 GiB disk.
 admission and bind the workflow to the immutable action containing this list.
 The action grants scheduling eligibility only; actual Root admission, original
 attempts, retained failure histories, resource limits and deadlines are unchanged.
+
+2026-11-14: admit the exact functional successor after the original 8926 Main
+run failed with six verified preparation effects. This is scheduling eligibility
+for the same two business profiles and three operating cases. It does not
+classify the old run as no-work, clear its effects, reset attempts or reviews,
+or replace the independent Root proof of cleanup, custody and retired history.
