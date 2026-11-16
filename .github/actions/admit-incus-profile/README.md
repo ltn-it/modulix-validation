@@ -52,7 +52,8 @@ its recorded follow-up `14e3abd5d1fa0cfad14d52ec83483b761de207f0`, the
 client-protocol correction `f27c1d4edff75377f285275cec9bfec6bc3081f6`, or the
 recorded failed successors `3d84e26d90cc778fb8c4f462ce481584da57fb5a` and
 `f138a227d9eee41ea698b1a6f3b9a05f7ae3e18d`, plus the failed-with-effects
-predecessor `8926e7f535f158d4af89e4ac68149ff0b8ab740d`.
+predecessors `8926e7f535f158d4af89e4ac68149ff0b8ab740d` and
+`086d039c8c58bc91edfeacadf508c207a03a58b5`.
 This closed set is not a generic retry or future-Main allowance. Original
 failures remain failures; no rerun, dispatch or attempt reset is admitted.
 Ordinary profiles reject a nonempty operating case, and the original receiver
@@ -80,3 +81,8 @@ run failed with six verified preparation effects. This is scheduling eligibility
 for the same two business profiles and three operating cases. It does not
 classify the old run as no-work, clear its effects, reset attempts or reviews,
 or replace the independent Root proof of cleanup, custody and retired history.
+
+2026-11-16: retain the exact 086d failed-after-context-publication predecessor
+for a separately published functional successor. This changes hosted scheduling
+only; it does not retry the original run, classify its effects as no-work, or
+replace Root-native retirement, custody, identity and per-job authorization.
