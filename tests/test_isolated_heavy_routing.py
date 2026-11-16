@@ -31,7 +31,7 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
         self.assertEqual(len(admission["steps"]), 1)
         step = admission["steps"][0]
         self.assertEqual(step["uses"],
-                         "ltn-it/modulix-validation/.github/actions/admit-incus-profile@42471389cfbcdd634f7cd352d710b1c6afe43f48")
+                         "ltn-it/modulix-validation/.github/actions/admit-incus-profile@a7849bc2634f4266a9a88acd2856ca3d05c2fddf")
         self.assertNotIn("run", step)
         self.assertNotIn("env", step)
         action = yaml.safe_load((ROOT / ".github/actions/admit-incus-profile/action.yml").read_text())
@@ -47,7 +47,7 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
         # The compiler/action closure is bound to the actual immutable source.
         for name in ("action.yml", "admission.py", "README.md"):
             path = ".github/actions/admit-incus-profile/" + name
-            exact = subprocess.check_output(["git", "show", "42471389cfbcdd634f7cd352d710b1c6afe43f48:" + path], cwd=ROOT)
+            exact = subprocess.check_output(["git", "show", "a7849bc2634f4266a9a88acd2856ca3d05c2fddf:" + path], cwd=ROOT)
             self.assertEqual(exact, (ROOT / path).read_bytes())
 
     def test_actual_workflow_pin_executes_the_recorded_successor_admissions(self):
@@ -71,22 +71,23 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
                         self.assertEqual(result.stdout, "profile=operating\nmatrix-json={\"include\":[]}\n"
                             "worker-group=lit-pis-prd-supplementary-isolated\noperating-case=" + case + "\n")
 
-    def test_actual_pinned_action_refuses_neighboring_sixth_native_contexts(self):
-        from test_operating_continuation import SIXTH_FAILED_POST_CONTEXT, operating
+    def test_actual_pinned_action_refuses_neighboring_failed_native_contexts(self):
+        from test_operating_continuation import SIXTH_FAILED_POST_CONTEXT, SEVENTH_FAILED_NATIVE_EXPIRY, operating
         step = self.workflow["jobs"]["validate-inputs"]["steps"][0]
         pin = step["uses"].rsplit("@", 1)[1]
         raw = subprocess.check_output(["git", "show", pin + ":.github/actions/admit-incus-profile/admission.py"], cwd=ROOT)
-        for key, value in (("CALLER_BEFORE", SIXTH_FAILED_POST_CONTEXT.upper()),
-                           ("CALLER_ATTEMPT", "2"), ("CALLER_EVENT", "pull_request"),
-                           ("CALLER_REPOSITORY", "foreign/fork"), ("CALLER_TRIGGERING_ACTOR", "litdeg"),
-                           ("CALLER_WORKFLOW_REF", "ltn-it/ansible-collection-supplementary/.github/workflows/other.yml@refs/heads/main")):
-            with self.subTest(key=key, value=value):
-                result = subprocess.run([sys.executable, "-I", "-B", "-c", raw.decode("utf-8")],
-                    env=operating(SIXTH_FAILED_POST_CONTEXT) | {key: value},
-                    capture_output=True, text=True, timeout=10)
-                self.assertEqual(result.returncode, 2)
-                self.assertEqual(result.stdout, "")
-                self.assertEqual(result.stderr, "Incus admission refused\n")
+        for parent in (SIXTH_FAILED_POST_CONTEXT, SEVENTH_FAILED_NATIVE_EXPIRY):
+            for key, value in (("CALLER_BEFORE", parent.upper()),
+                               ("CALLER_ATTEMPT", "2"), ("CALLER_EVENT", "pull_request"),
+                               ("CALLER_REPOSITORY", "foreign/fork"), ("CALLER_TRIGGERING_ACTOR", "litdeg"),
+                               ("CALLER_WORKFLOW_REF", "ltn-it/ansible-collection-supplementary/.github/workflows/other.yml@refs/heads/main")):
+                with self.subTest(parent=parent, key=key, value=value):
+                    result = subprocess.run([sys.executable, "-I", "-B", "-c", raw.decode("utf-8")],
+                        env=operating(parent) | {key: value},
+                        capture_output=True, text=True, timeout=10)
+                    self.assertEqual(result.returncode, 2)
+                    self.assertEqual(result.stdout, "")
+                    self.assertEqual(result.stderr, "Incus admission refused\n")
 
     def test_actual_contract_admits_main_receiver_and_denies_untrusted_context(self):
         self.assertEqual(self.invoke(), 0)
