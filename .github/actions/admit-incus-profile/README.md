@@ -54,7 +54,8 @@ recorded failed successors `3d84e26d90cc778fb8c4f462ce481584da57fb5a` and
 `f138a227d9eee41ea698b1a6f3b9a05f7ae3e18d`, plus the failed-with-effects
 predecessors `8926e7f535f158d4af89e4ac68149ff0b8ab740d` and
 `086d039c8c58bc91edfeacadf508c207a03a58b5`, and the failed native-authentication
-predecessor `cfd2e8ca4cbcf58a1a22cf37f2a8336bba19cb85`.
+predecessor `cfd2e8ca4cbcf58a1a22cf37f2a8336bba19cb85` and the failed catalogue-reader
+predecessor `8345d447e65609e66eac616afbeb3b5d4bc362be`.
 This closed set is not a generic retry or future-Main allowance. Original
 failures remain failures; no rerun, dispatch or attempt reset is admitted.
 Ordinary profiles reject a nonempty operating case, and the original receiver
@@ -63,13 +64,21 @@ commit parent and, for the follow-up, its separately approved exact continuation
 binding. The hosted caller condition alone grants no operating lease. Other
 later ordinary Main deliveries do not repeat these four-hour negative cases.
 
-The last predecessor's original run
+The earlier authentication predecessor's original run
 [`43947870949`, attempt 1](https://github.com/ltn-it/ansible-collection-supplementary/actions/runs/43947870949)
 failed during bootstrap authentication before a lease or VM was created. Its
 failure remains part of the native history. The additional exact parent permits
 scheduling a genuine subsequent Main push; attempt 2, reruns, arbitrary parents,
 and other caller identities remain refused. Root must separately authenticate
 the original terminal graph and preserve its existing intake/catalogue state.
+
+The catalogue-reader predecessor's original run
+[`44153750769`, attempt 1](https://github.com/ltn-it/ansible-collection-supplementary/actions/runs/44153750769)
+failed before creating a lease. Its completed configuration and intake remain
+preserved historical inputs, and its failure is not a passed Heavy test. The
+additional exact parent permits only a genuinely subsequent Main push; Root
+must independently authenticate the complete history and the new published
+caller/callee pair. No old attempt, stage or execution is retried or adopted.
 
 Operating resources are prepared by Root, outside the caller's business limits:
 one CPU, 2 GiB RAM, 5 GiB root and 500 MiB VM state within a 6 GiB VM budget.

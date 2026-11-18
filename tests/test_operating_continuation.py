@@ -1,4 +1,4 @@
-"""Actual hosted compiler entry: eight exact Source parents, no generic retry route.
+"""Actual hosted compiler entry: nine exact Source parents, no generic retry route.
 
 GitHub-provided environment is modeled; no native assignment or Root grant is
 asserted. The unchanged Root verifier still independently qualifies every job.
@@ -19,8 +19,9 @@ FOURTH_FAILED = "f138a227d9eee41ea698b1a6f3b9a05f7ae3e18d"
 FIFTH_FAILED_WITH_EFFECTS = "8926e7f535f158d4af89e4ac68149ff0b8ab740d"
 SIXTH_FAILED_POST_CONTEXT = "086d039c8c58bc91edfeacadf508c207a03a58b5"
 SEVENTH_FAILED_NATIVE_EXPIRY = "cfd2e8ca4cbcf58a1a22cf37f2a8336bba19cb85"
+EIGHTH_FAILED_CATALOGUE_READER = "8345d447e65609e66eac616afbeb3b5d4bc362be"
 PARENTS = (HISTORICAL, FOLLOW_UP, PREAUTH_FOLLOW_UP, THIRD_FAILED, FOURTH_FAILED, FIFTH_FAILED_WITH_EFFECTS,
-           SIXTH_FAILED_POST_CONTEXT, SEVENTH_FAILED_NATIVE_EXPIRY)
+           SIXTH_FAILED_POST_CONTEXT, SEVENTH_FAILED_NATIVE_EXPIRY, EIGHTH_FAILED_CATALOGUE_READER)
 CASES = ("failure", "broker-cancel", "expiry-controller-loss")
 
 
@@ -88,6 +89,11 @@ class OperatingContinuationEntryTests(unittest.TestCase):
         # The original run failed before a lease. This scheduling boundary
         # does not replace Root's native history and preserved catalogue checks.
         self.assert_admitted(SEVENTH_FAILED_NATIVE_EXPIRY)
+
+    def test_eighth_failed_catalogue_reader_parent_admits_both_actors_and_three_cases(self):
+        # Hosted scheduling is not a retry, historical qualification, Root
+        # authority, or proof that the expired original stage may be adopted.
+        self.assert_admitted(EIGHTH_FAILED_CATALOGUE_READER)
 
     def test_follow_up_does_not_admit_neighboring_source_or_native_domains(self):
         changes = (
