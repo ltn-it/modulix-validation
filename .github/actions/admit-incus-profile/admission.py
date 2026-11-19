@@ -19,6 +19,7 @@ OPERATING_FIFTH_BEFORE = "8926e7f535f158d4af89e4ac68149ff0b8ab740d"
 OPERATING_SIXTH_BEFORE = "086d039c8c58bc91edfeacadf508c207a03a58b5"
 OPERATING_SEVENTH_BEFORE = "cfd2e8ca4cbcf58a1a22cf37f2a8336bba19cb85"
 OPERATING_EIGHTH_BEFORE = "8345d447e65609e66eac616afbeb3b5d4bc362be"
+OPERATING_NINTH_BEFORE = "86f3cb46e5856c4066cac14e73f46c3cefb8453e"
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,62}")
 ROLE = re.compile(r"[a-z][a-z0-9_]{0,62}")
 IMAGE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,511}")
@@ -208,13 +209,14 @@ def admit(environment):
     if profile == "operating":
         require(supplementary and not receiver and case in OPERATING_CASES,
                 "operating-source-case")
-        # Scheduling retains the eight failed transitions and initial boundary.
+        # Scheduling retains the nine failed transitions and initial boundary.
         # Root admission still independently binds the genuine job and continuation.
         require(
             environment.get("CALLER_BEFORE")
             in (OPERATING_BEFORE, OPERATING_CONTINUATION_BEFORE, OPERATING_PREAUTH_BEFORE,
                 OPERATING_THIRD_BEFORE, OPERATING_FOURTH_BEFORE, OPERATING_FIFTH_BEFORE,
-                OPERATING_SIXTH_BEFORE, OPERATING_SEVENTH_BEFORE, OPERATING_EIGHTH_BEFORE),
+                OPERATING_SIXTH_BEFORE, OPERATING_SEVENTH_BEFORE, OPERATING_EIGHTH_BEFORE,
+                OPERATING_NINTH_BEFORE),
             "operating-first-main-transition",
         )
         raw = environment.get("MATRIX_JSON")
