@@ -31,7 +31,7 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
         self.assertEqual(len(admission["steps"]), 1)
         step = admission["steps"][0]
         self.assertEqual(step["uses"],
-                         "ltn-it/modulix-validation/.github/actions/admit-incus-profile@2d9492d25fe7d12fe008dd16aa614cfe7ba778ed")
+                         "ltn-it/modulix-validation/.github/actions/admit-incus-profile@4df11e1d727b742fa01d8c2f2a5ef76c2c9ae8ff")
         self.assertNotIn("run", step)
         self.assertNotIn("env", step)
         action = yaml.safe_load((ROOT / ".github/actions/admit-incus-profile/action.yml").read_text())
@@ -47,7 +47,7 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
         # The compiler/action closure is bound to the actual immutable source.
         for name in ("action.yml", "admission.py", "README.md"):
             path = ".github/actions/admit-incus-profile/" + name
-            exact = subprocess.check_output(["git", "show", "2d9492d25fe7d12fe008dd16aa614cfe7ba778ed:" + path], cwd=ROOT)
+            exact = subprocess.check_output(["git", "show", "4df11e1d727b742fa01d8c2f2a5ef76c2c9ae8ff:" + path], cwd=ROOT)
             self.assertEqual(exact, (ROOT / path).read_bytes())
 
     def test_actual_workflow_pin_executes_the_recorded_successor_admissions(self):
@@ -72,11 +72,13 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
                             "worker-group=lit-pis-prd-supplementary-isolated\noperating-case=" + case + "\n")
 
     def test_actual_pinned_action_refuses_neighboring_failed_native_contexts(self):
-        from test_operating_continuation import SIXTH_FAILED_POST_CONTEXT, SEVENTH_FAILED_NATIVE_EXPIRY, operating
+        from test_operating_continuation import (SIXTH_FAILED_POST_CONTEXT, SEVENTH_FAILED_NATIVE_EXPIRY,
+                                                  NINTH_FAILED_PARTIAL_PREPARATION, operating)
         step = self.workflow["jobs"]["validate-inputs"]["steps"][0]
         pin = step["uses"].rsplit("@", 1)[1]
         raw = subprocess.check_output(["git", "show", pin + ":.github/actions/admit-incus-profile/admission.py"], cwd=ROOT)
-        for parent in (SIXTH_FAILED_POST_CONTEXT, SEVENTH_FAILED_NATIVE_EXPIRY):
+        for parent in (SIXTH_FAILED_POST_CONTEXT, SEVENTH_FAILED_NATIVE_EXPIRY,
+                       NINTH_FAILED_PARTIAL_PREPARATION):
             for key, value in (("CALLER_BEFORE", parent.upper()),
                                ("CALLER_ATTEMPT", "2"), ("CALLER_EVENT", "pull_request"),
                                ("CALLER_REPOSITORY", "foreign/fork"), ("CALLER_TRIGGERING_ACTOR", "litdeg"),
