@@ -57,6 +57,7 @@ predecessors `8926e7f535f158d4af89e4ac68149ff0b8ab740d` and
 predecessor `cfd2e8ca4cbcf58a1a22cf37f2a8336bba19cb85` and the failed catalogue-reader
 predecessor `8345d447e65609e66eac616afbeb3b5d4bc362be`, and the separately retired
 partial-preparation predecessor `86f3cb46e5856c4066cac14e73f46c3cefb8453e`.
+The original push at `5604f19544f97b572272496fd61f5c4949d45fba` ended before lease allocation and is also an eligible predecessor.
 This closed set is not a generic retry or future-Main allowance. Original
 failures remain failures; no rerun, dispatch or attempt reset is admitted.
 Ordinary profiles reject a nonempty operating case, and the original receiver
