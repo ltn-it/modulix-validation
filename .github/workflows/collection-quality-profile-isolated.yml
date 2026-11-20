@@ -64,7 +64,7 @@ jobs:
     steps:
       - id: contract
         name: Compile canonical protected profile admission
-        uses: ltn-it/modulix-validation/.github/actions/admit-incus-profile@d3b6fd0e78b4c3f6f213efdd886548bb6236ae07
+        uses: ltn-it/modulix-validation/.github/actions/admit-incus-profile@4df11e1d727b742fa01d8c2f2a5ef76c2c9ae8ff
         with:
           operating-case: ${{ inputs['operating-case'] }}
           profile: ${{ inputs.profile }}
