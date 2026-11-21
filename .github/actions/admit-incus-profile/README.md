@@ -61,6 +61,9 @@ The original push at `5604f19544f97b572272496fd61f5c4949d45fba` ended before lea
 The failed preparation at `e403e0fffa9318be82718b29e854ab7a3a6da98c`
 is eligible after its retained resources were verified absent. Root must
 independently verify the closed predecessor and the new run binding.
+The Main push at `69d2ccf034dfe5c64c0fda8fc037569fc9b96ff6` failed at the
+Podman startup boundary. Root must verify the separate retirement of its
+original resources and bind a new push before it can allocate any lease.
 This closed set is not a generic retry or future-Main allowance. Original
 failures remain failures; no rerun, dispatch or attempt reset is admitted.
 Ordinary profiles reject a nonempty operating case, and the original receiver
