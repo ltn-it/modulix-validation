@@ -1,4 +1,4 @@
-"""Actual hosted compiler entry: eleven exact Source parents, no generic retry route.
+"""Actual hosted compiler entry for the closed set of exact Source parents.
 
 GitHub-provided environment is modeled; no native assignment or Root grant is
 asserted. The unchanged Root verifier still independently qualifies every job.
@@ -22,9 +22,10 @@ SEVENTH_FAILED_NATIVE_EXPIRY = "cfd2e8ca4cbcf58a1a22cf37f2a8336bba19cb85"
 EIGHTH_FAILED_CATALOGUE_READER = "8345d447e65609e66eac616afbeb3b5d4bc362be"
 NINTH_FAILED_PARTIAL_PREPARATION = "86f3cb46e5856c4066cac14e73f46c3cefb8453e"
 TENTH_FAILED_BEFORE_LEASE = "5604f19544f97b572272496fd61f5c4949d45fba"
+VERIFIED_CLOSURE = "e403e0fffa9318be82718b29e854ab7a3a6da98c"
 PARENTS = (HISTORICAL, FOLLOW_UP, PREAUTH_FOLLOW_UP, THIRD_FAILED, FOURTH_FAILED, FIFTH_FAILED_WITH_EFFECTS,
            SIXTH_FAILED_POST_CONTEXT, SEVENTH_FAILED_NATIVE_EXPIRY, EIGHTH_FAILED_CATALOGUE_READER,
-           NINTH_FAILED_PARTIAL_PREPARATION, TENTH_FAILED_BEFORE_LEASE)
+           NINTH_FAILED_PARTIAL_PREPARATION, TENTH_FAILED_BEFORE_LEASE, VERIFIED_CLOSURE)
 CASES = ("failure", "broker-cancel", "expiry-controller-loss")
 
 
@@ -101,6 +102,9 @@ class OperatingContinuationEntryTests(unittest.TestCase):
     def test_original_prelease_failure_admits_both_actors_and_three_cases(self):
         self.assert_admitted(TENTH_FAILED_BEFORE_LEASE)
 
+    def test_verified_closure_admits_both_actors_and_three_cases(self):
+        self.assert_admitted(VERIFIED_CLOSURE)
+
     def test_ninth_partial_preparation_parent_admits_both_actors_and_three_cases(self):
         # Root must separately prove the original retained UNKNOWN and its
         # independent retirement. Hosted admission grants scheduling only.
@@ -141,7 +145,7 @@ class OperatingContinuationEntryTests(unittest.TestCase):
         changes += tuple(("CALLER_BEFORE", value) for parent in (THIRD_FAILED, FOURTH_FAILED, FIFTH_FAILED_WITH_EFFECTS,
                                                                      SIXTH_FAILED_POST_CONTEXT,
                                                                      SEVENTH_FAILED_NATIVE_EXPIRY, EIGHTH_FAILED_CATALOGUE_READER,
-                                                                     NINTH_FAILED_PARTIAL_PREPARATION)
+                                                                     NINTH_FAILED_PARTIAL_PREPARATION, VERIFIED_CLOSURE)
                          for value in (parent.upper(), parent[:-1], parent + "0", " " + parent))
         for parent in PARENTS:
             for key, value in changes:
