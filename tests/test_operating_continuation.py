@@ -23,9 +23,10 @@ EIGHTH_FAILED_CATALOGUE_READER = "8345d447e65609e66eac616afbeb3b5d4bc362be"
 NINTH_FAILED_PARTIAL_PREPARATION = "86f3cb46e5856c4066cac14e73f46c3cefb8453e"
 TENTH_FAILED_BEFORE_LEASE = "5604f19544f97b572272496fd61f5c4949d45fba"
 VERIFIED_CLOSURE = "e403e0fffa9318be82718b29e854ab7a3a6da98c"
+PODMAN_REPAIR_BEFORE = "69d2ccf034dfe5c64c0fda8fc037569fc9b96ff6"
 PARENTS = (HISTORICAL, FOLLOW_UP, PREAUTH_FOLLOW_UP, THIRD_FAILED, FOURTH_FAILED, FIFTH_FAILED_WITH_EFFECTS,
            SIXTH_FAILED_POST_CONTEXT, SEVENTH_FAILED_NATIVE_EXPIRY, EIGHTH_FAILED_CATALOGUE_READER,
-           NINTH_FAILED_PARTIAL_PREPARATION, TENTH_FAILED_BEFORE_LEASE, VERIFIED_CLOSURE)
+           NINTH_FAILED_PARTIAL_PREPARATION, TENTH_FAILED_BEFORE_LEASE, VERIFIED_CLOSURE, PODMAN_REPAIR_BEFORE)
 CASES = ("failure", "broker-cancel", "expiry-controller-loss")
 
 
@@ -105,6 +106,9 @@ class OperatingContinuationEntryTests(unittest.TestCase):
     def test_verified_closure_admits_both_actors_and_three_cases(self):
         self.assert_admitted(VERIFIED_CLOSURE)
 
+    def test_podman_repair_parent_admits_both_actors_and_three_cases(self):
+        self.assert_admitted(PODMAN_REPAIR_BEFORE)
+
     def test_ninth_partial_preparation_parent_admits_both_actors_and_three_cases(self):
         # Root must separately prove the original retained UNKNOWN and its
         # independent retirement. Hosted admission grants scheduling only.
@@ -145,7 +149,8 @@ class OperatingContinuationEntryTests(unittest.TestCase):
         changes += tuple(("CALLER_BEFORE", value) for parent in (THIRD_FAILED, FOURTH_FAILED, FIFTH_FAILED_WITH_EFFECTS,
                                                                      SIXTH_FAILED_POST_CONTEXT,
                                                                      SEVENTH_FAILED_NATIVE_EXPIRY, EIGHTH_FAILED_CATALOGUE_READER,
-                                                                     NINTH_FAILED_PARTIAL_PREPARATION, VERIFIED_CLOSURE)
+                                                                     NINTH_FAILED_PARTIAL_PREPARATION, VERIFIED_CLOSURE,
+                                                                     PODMAN_REPAIR_BEFORE)
                          for value in (parent.upper(), parent[:-1], parent + "0", " " + parent))
         for parent in PARENTS:
             for key, value in changes:
