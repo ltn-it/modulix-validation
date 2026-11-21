@@ -58,6 +58,9 @@ predecessor `cfd2e8ca4cbcf58a1a22cf37f2a8336bba19cb85` and the failed catalogue-
 predecessor `8345d447e65609e66eac616afbeb3b5d4bc362be`, and the separately retired
 partial-preparation predecessor `86f3cb46e5856c4066cac14e73f46c3cefb8453e`.
 The original push at `5604f19544f97b572272496fd61f5c4949d45fba` ended before lease allocation and is also an eligible predecessor.
+The failed preparation at `e403e0fffa9318be82718b29e854ab7a3a6da98c`
+is eligible after its retained resources were verified absent. Root must
+independently verify the closed predecessor and the new run binding.
 This closed set is not a generic retry or future-Main allowance. Original
 failures remain failures; no rerun, dispatch or attempt reset is admitted.
 Ordinary profiles reject a nonempty operating case, and the original receiver
