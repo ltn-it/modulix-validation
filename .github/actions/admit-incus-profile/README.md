@@ -64,6 +64,10 @@ independently verify the closed predecessor and the new run binding.
 The Main push at `69d2ccf034dfe5c64c0fda8fc037569fc9b96ff6` failed at the
 Podman startup boundary. Root must verify the separate retirement of its
 original resources and bind a new push before it can allocate any lease.
+The Main push at `e42b0cdd65536e3749f6c405ec23955e5aaa419b` stopped in the
+host namespace census after the source intake was sealed. The run created no
+configuration, lease or VM. Root must preserve the sealed intake, verify the
+terminal run and bind the new protected push before it can allocate a lease.
 This closed set is not a generic retry or future-Main allowance. Original
 failures remain failures; no rerun, dispatch or attempt reset is admitted.
 Ordinary profiles reject a nonempty operating case, and the original receiver
