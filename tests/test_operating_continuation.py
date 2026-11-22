@@ -25,10 +25,11 @@ TENTH_FAILED_BEFORE_LEASE = "5604f19544f97b572272496fd61f5c4949d45fba"
 VERIFIED_CLOSURE = "e403e0fffa9318be82718b29e854ab7a3a6da98c"
 PODMAN_REPAIR_BEFORE = "69d2ccf034dfe5c64c0fda8fc037569fc9b96ff6"
 CENSUS_HELD_BEFORE = "e42b0cdd65536e3749f6c405ec23955e5aaa419b"
+SEALED_INTAKE_BEFORE = "8edd19c61a8faffe10d6c570cc3ad8338750f475"
 PARENTS = (HISTORICAL, FOLLOW_UP, PREAUTH_FOLLOW_UP, THIRD_FAILED, FOURTH_FAILED, FIFTH_FAILED_WITH_EFFECTS,
            SIXTH_FAILED_POST_CONTEXT, SEVENTH_FAILED_NATIVE_EXPIRY, EIGHTH_FAILED_CATALOGUE_READER,
            NINTH_FAILED_PARTIAL_PREPARATION, TENTH_FAILED_BEFORE_LEASE, VERIFIED_CLOSURE, PODMAN_REPAIR_BEFORE,
-           CENSUS_HELD_BEFORE)
+           CENSUS_HELD_BEFORE, SEALED_INTAKE_BEFORE)
 CASES = ("failure", "broker-cancel", "expiry-controller-loss")
 
 
@@ -114,6 +115,9 @@ class OperatingContinuationEntryTests(unittest.TestCase):
     def test_census_held_parent_admits_both_actors_and_three_cases(self):
         self.assert_admitted(CENSUS_HELD_BEFORE)
 
+    def test_sealed_intake_parent_admits_both_actors_and_three_cases(self):
+        self.assert_admitted(SEALED_INTAKE_BEFORE)
+
     def test_ninth_partial_preparation_parent_admits_both_actors_and_three_cases(self):
         # Root must separately prove the original retained UNKNOWN and its
         # independent retirement. Hosted admission grants scheduling only.
@@ -155,7 +159,7 @@ class OperatingContinuationEntryTests(unittest.TestCase):
                                                                      SIXTH_FAILED_POST_CONTEXT,
                                                                      SEVENTH_FAILED_NATIVE_EXPIRY, EIGHTH_FAILED_CATALOGUE_READER,
                                                                      NINTH_FAILED_PARTIAL_PREPARATION, VERIFIED_CLOSURE,
-                                                                     PODMAN_REPAIR_BEFORE)
+                                                                     PODMAN_REPAIR_BEFORE, SEALED_INTAKE_BEFORE)
                          for value in (parent.upper(), parent[:-1], parent + "0", " " + parent))
         for parent in PARENTS:
             for key, value in changes:
