@@ -68,6 +68,10 @@ The Main push at `e42b0cdd65536e3749f6c405ec23955e5aaa419b` stopped in the
 host namespace census after the source intake was sealed. The run created no
 configuration, lease or VM. Root must preserve the sealed intake, verify the
 terminal run and bind the new protected push before it can allocate a lease.
+The Main push at `8edd19c61a8faffe10d6c570cc3ad8338750f475` reached the
+authorization deadline after sealing both source intake and configuration.
+It created no lease or VM. Root verifies both sealed entries, the empty
+predecessor bank, and the exact new run before allowing any lease.
 This closed set is not a generic retry or future-Main allowance. Original
 failures remain failures; no rerun, dispatch or attempt reset is admitted.
 Ordinary profiles reject a nonempty operating case, and the original receiver
