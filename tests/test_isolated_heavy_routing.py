@@ -31,7 +31,7 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
         self.assertEqual(len(admission["steps"]), 1)
         step = admission["steps"][0]
         self.assertEqual(step["uses"],
-                         "ltn-it/modulix-validation/.github/actions/admit-incus-profile@36e430cd4e2f3b09b55efd56dd9dd11909ab796a")
+                         "ltn-it/modulix-validation/.github/actions/admit-incus-profile@218c1fcc491c204e3dd6ba13c107d557d7dbc828")
         self.assertNotIn("run", step)
         self.assertNotIn("env", step)
         action = yaml.safe_load((ROOT / ".github/actions/admit-incus-profile/action.yml").read_text())
@@ -47,7 +47,7 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
         # The compiler/action closure is bound to the actual immutable source.
         for name in ("action.yml", "admission.py", "README.md"):
             path = ".github/actions/admit-incus-profile/" + name
-            exact = subprocess.check_output(["git", "show", "36e430cd4e2f3b09b55efd56dd9dd11909ab796a:" + path], cwd=ROOT)
+            exact = subprocess.check_output(["git", "show", "218c1fcc491c204e3dd6ba13c107d557d7dbc828:" + path], cwd=ROOT)
             self.assertEqual(exact, (ROOT / path).read_bytes())
 
     def test_actual_workflow_pin_executes_the_recorded_successor_admissions(self):
