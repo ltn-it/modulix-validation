@@ -72,6 +72,9 @@ The Main push at `8edd19c61a8faffe10d6c570cc3ad8338750f475` reached the
 authorization deadline after sealing both source intake and configuration.
 It created no lease or VM. Root verifies both sealed entries, the empty
 predecessor bank, and the exact new run before allowing any lease.
+The Main push at `5759a628d9fadb258036390483cb158c8ea36570` failed at Podman startup before
+creating a VM. Root must verify expiry and separate retirement of the retained
+lease resources, preserve the original outcome, and bind the next protected push.
 This closed set is not a generic retry or future-Main allowance. Original
 failures remain failures; no rerun, dispatch or attempt reset is admitted.
 Ordinary profiles reject a nonempty operating case, and the original receiver
