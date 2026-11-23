@@ -28,10 +28,12 @@ CENSUS_HELD_BEFORE = "e42b0cdd65536e3749f6c405ec23955e5aaa419b"
 SEALED_INTAKE_BEFORE = "8edd19c61a8faffe10d6c570cc3ad8338750f475"
 ENGINE_RETIREMENT_BEFORE = "5759a628d9fadb258036390483cb158c8ea36570"
 LEDGER_READ_BEFORE = "a2d4a7e906eec88b250af82375d82592f9b2380f"
+PODMAN_CID_BEFORE = "33c97bee9d37f3b1901765d5ffc59a79823c7534"
 PARENTS = (HISTORICAL, FOLLOW_UP, PREAUTH_FOLLOW_UP, THIRD_FAILED, FOURTH_FAILED, FIFTH_FAILED_WITH_EFFECTS,
            SIXTH_FAILED_POST_CONTEXT, SEVENTH_FAILED_NATIVE_EXPIRY, EIGHTH_FAILED_CATALOGUE_READER,
            NINTH_FAILED_PARTIAL_PREPARATION, TENTH_FAILED_BEFORE_LEASE, VERIFIED_CLOSURE, PODMAN_REPAIR_BEFORE,
-           CENSUS_HELD_BEFORE, SEALED_INTAKE_BEFORE, ENGINE_RETIREMENT_BEFORE, LEDGER_READ_BEFORE)
+           CENSUS_HELD_BEFORE, SEALED_INTAKE_BEFORE, ENGINE_RETIREMENT_BEFORE, LEDGER_READ_BEFORE,
+           PODMAN_CID_BEFORE)
 CASES = ("failure", "broker-cancel", "expiry-controller-loss")
 
 
@@ -126,6 +128,9 @@ class OperatingContinuationEntryTests(unittest.TestCase):
     def test_ledger_read_parent_admits_both_actors_and_three_cases(self):
         self.assert_admitted(LEDGER_READ_BEFORE)
 
+    def test_podman_cid_repair_parent_admits_both_actors_and_three_cases(self):
+        self.assert_admitted(PODMAN_CID_BEFORE)
+
     def test_ninth_partial_preparation_parent_admits_both_actors_and_three_cases(self):
         # Root must separately prove the original retained UNKNOWN and its
         # independent retirement. Hosted admission grants scheduling only.
@@ -142,6 +147,7 @@ class OperatingContinuationEntryTests(unittest.TestCase):
             ("CALLER_BEFORE", "a" * 40),
             ("CALLER_BEFORE", ENGINE_RETIREMENT_BEFORE[:-1] + "1"),
             ("CALLER_BEFORE", LEDGER_READ_BEFORE[:-1] + "e"),
+            ("CALLER_BEFORE", PODMAN_CID_BEFORE[:-1] + "5"),
             ("CALLER_ATTEMPT", "2"),
             ("CALLER_EVENT", "workflow_dispatch"),
             ("CALLER_EVENT", "pull_request"),
