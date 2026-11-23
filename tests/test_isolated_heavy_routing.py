@@ -9,6 +9,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/collection-quality-profile-isolated.yml"
+ADMISSION_PIN = "73debdfa50f4f6972fd8740c87e0d6a647a4f7ae"
 
 
 class IsolatedHeavyRoutingTests(unittest.TestCase):
@@ -31,7 +32,7 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
         self.assertEqual(len(admission["steps"]), 1)
         step = admission["steps"][0]
         self.assertEqual(step["uses"],
-                         "ltn-it/modulix-validation/.github/actions/admit-incus-profile@e1436e4394a2837b21166b5ed5c8d1272c6518c4")
+                         "ltn-it/modulix-validation/.github/actions/admit-incus-profile@" + ADMISSION_PIN)
         self.assertNotIn("run", step)
         self.assertNotIn("env", step)
         action = yaml.safe_load((ROOT / ".github/actions/admit-incus-profile/action.yml").read_text())
@@ -47,7 +48,7 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
         # The compiler/action closure is bound to the actual immutable source.
         for name in ("action.yml", "admission.py", "README.md"):
             path = ".github/actions/admit-incus-profile/" + name
-            exact = subprocess.check_output(["git", "show", "e1436e4394a2837b21166b5ed5c8d1272c6518c4:" + path], cwd=ROOT)
+            exact = subprocess.check_output(["git", "show", ADMISSION_PIN + ":" + path], cwd=ROOT)
             self.assertEqual(exact, (ROOT / path).read_bytes())
 
     def test_actual_workflow_pin_executes_the_recorded_successor_admissions(self):
@@ -74,12 +75,12 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
     def test_actual_pinned_action_refuses_neighboring_failed_native_contexts(self):
         from test_operating_continuation import (SIXTH_FAILED_POST_CONTEXT, SEVENTH_FAILED_NATIVE_EXPIRY,
                                                   NINTH_FAILED_PARTIAL_PREPARATION, VERIFIED_CLOSURE,
-                                                  PODMAN_REPAIR_BEFORE, operating)
+                                                  PODMAN_REPAIR_BEFORE, PODMAN_CID_BEFORE, operating)
         step = self.workflow["jobs"]["validate-inputs"]["steps"][0]
         pin = step["uses"].rsplit("@", 1)[1]
         raw = subprocess.check_output(["git", "show", pin + ":.github/actions/admit-incus-profile/admission.py"], cwd=ROOT)
         for parent in (SIXTH_FAILED_POST_CONTEXT, SEVENTH_FAILED_NATIVE_EXPIRY,
-                       NINTH_FAILED_PARTIAL_PREPARATION, VERIFIED_CLOSURE, PODMAN_REPAIR_BEFORE):
+                       NINTH_FAILED_PARTIAL_PREPARATION, VERIFIED_CLOSURE, PODMAN_REPAIR_BEFORE, PODMAN_CID_BEFORE):
             for key, value in (("CALLER_BEFORE", parent.upper()),
                                ("CALLER_ATTEMPT", "2"), ("CALLER_EVENT", "pull_request"),
                                ("CALLER_REPOSITORY", "foreign/fork"), ("CALLER_TRIGGERING_ACTOR", "litdeg"),
