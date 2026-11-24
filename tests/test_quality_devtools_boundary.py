@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from contextlib import redirect_stderr
 import importlib.util
+import io
 import json
 import os
 import subprocess
@@ -241,6 +243,36 @@ class QualityDevtoolsBoundaryTests(unittest.TestCase):
             )
             self.assertEqual("fixture\n", proof.read_text())
             self.assertEqual("failure", results["destroy"]["outcome"])
+
+    def test_reports_only_first_failed_phase_across_owned_cleanup(self):
+        module = self.load_driver()
+        diagnostic = io.StringIO()
+        with tempfile.TemporaryDirectory() as temporary, redirect_stderr(diagnostic):
+            root = Path(temporary)
+            results = module.run_steps([
+                {"id": "phase-3", "run": "exit 2"},
+                {"id": "phase-4", "run": "exit 98"},
+                {"id": "cleanup", "if": "always()", "run": "exit 9"},
+            ], {}, os.environ, root / "control", root)
+        self.assertEqual("failure", results["phase-3"]["outcome"])
+        self.assertEqual("skipped", results["phase-4"]["outcome"])
+        self.assertEqual("failure", results["cleanup"]["outcome"])
+        self.assertEqual("quality-cell first failed phase=phase-3 exit=2\n", diagnostic.getvalue())
+
+    def test_reports_molecule_output_failure_before_cleanup_without_skipping_following_steps(self):
+        module = self.load_driver()
+        diagnostic = io.StringIO()
+        with tempfile.TemporaryDirectory() as temporary, redirect_stderr(diagnostic):
+            root = Path(temporary)
+            results = module.run_steps([
+                {"id": "molecule", "run": 'echo exit_code=2 >> "$GITHUB_OUTPUT"'},
+                {"id": "next", "run": "exit 0"},
+                {"id": "cleanup", "if": "always()", "run": "exit 3"},
+            ], {}, dict(os.environ), root / "control", root)
+        self.assertEqual(results["molecule"], {"outcome": "success", "outputs": {"exit_code": "2"}})
+        self.assertEqual("success", results["next"]["outcome"])
+        self.assertEqual("failure", results["cleanup"]["outcome"])
+        self.assertEqual("quality-cell first failed phase=molecule exit=2\n", diagnostic.getvalue())
 
     def test_failed_test_still_captures_destroys_and_records_inside_cell(self):
         module = self.load_driver()

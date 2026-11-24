@@ -221,6 +221,41 @@ class QualityConnectionContractTests(unittest.TestCase):
                     self.assertNotEqual(0, result.returncode)
                     self.assertFalse(marker.exists())
 
+    def test_protected_tls_capacity_passes_the_exact_vm_request(self):
+        steps = yaml.safe_load((ACTION / "profile-steps.yml").read_text())["steps"]
+        script = next(step["run"] for step in steps if step.get("id") == "phase-3")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            helper = root / "molecule/shared/incus/helpers/tls_transport.py"
+            helper.parent.mkdir(parents=True)
+            helper.write_text(
+                "import json, sys\nfrom pathlib import Path\n"
+                "Path('tls-argv.json').write_text(json.dumps(sys.argv[1:]))\n"
+                "raise SystemExit(73)\n"
+            )
+            commands = root / "bin"
+            commands.mkdir()
+            for name in ("ansible-galaxy", "incus", "molecule", "openssl"):
+                command = commands / name
+                command.write_text("#!/bin/sh\nexit 1\n")
+                command.chmod(0o755)
+            environment = {**os.environ, "PATH": f"{commands}:{os.environ['PATH']}",
+                "QUALITY_INCUS_RUNTIME_SCHEMA": "2", "KEYCLOAK_TEST_INSTANCE_TYPE": "vm",
+                "MOLECULE_INCUS_TRANSPORT": "tls", "MOLECULE_INCUS_REMOTE": "quality",
+                "MOLECULE_INCUS_PROJECT": "bound-project", "QUALITY_INCUS_PROJECT": "bound-project",
+                "KEYCLOAK_TEST_INSTANCE": "probe-vm", "KEYCLOAK_TEST_CPU_LIMIT": "4",
+                "KEYCLOAK_TEST_MEMORY_LIMIT": "12GiB", "KEYCLOAK_TEST_DISK_LIMIT": "24GiB",
+                "GITHUB_REPOSITORY": "ltn-it/ansible-collection-supplementary",
+                "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "1", "MOLECULE_TEST_OWNER": "owned-vm"}
+            process = subprocess.run(["bash", "-euc", script], cwd=root, env=environment,
+                                     capture_output=True, text=True, check=False)
+            self.assertEqual(73, process.returncode, process.stderr)
+            arguments = json.loads((root / "tls-argv.json").read_bytes())
+            self.assertEqual(1, arguments.count("--capacity"))
+            self.assertEqual([["probe-vm", "vm"]], json.loads(arguments[arguments.index("--platforms") + 1]))
+            self.assertEqual({"probe-vm": {"cpu": "4", "memory": "12GiB", "disk": "24GiB"}},
+                             json.loads(arguments[arguments.index("--requests") + 1]))
+
     def test_actual_producer_disposition_matches_existing_consumer_contract(self):
         steps = yaml.safe_load((ACTION / "profile-steps.yml").read_text())["steps"]
         script = next(step["run"] for step in steps if step.get("id") == "phase-4")
