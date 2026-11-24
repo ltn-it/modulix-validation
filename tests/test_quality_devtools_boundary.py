@@ -259,6 +259,21 @@ class QualityDevtoolsBoundaryTests(unittest.TestCase):
         self.assertEqual("failure", results["cleanup"]["outcome"])
         self.assertEqual("quality-cell first failed phase=phase-3 exit=2\n", diagnostic.getvalue())
 
+    def test_reports_molecule_output_failure_before_cleanup_without_skipping_following_steps(self):
+        module = self.load_driver()
+        diagnostic = io.StringIO()
+        with tempfile.TemporaryDirectory() as temporary, redirect_stderr(diagnostic):
+            root = Path(temporary)
+            results = module.run_steps([
+                {"id": "molecule", "run": 'echo exit_code=2 >> "$GITHUB_OUTPUT"'},
+                {"id": "next", "run": "exit 0"},
+                {"id": "cleanup", "if": "always()", "run": "exit 3"},
+            ], {}, dict(os.environ), root / "control", root)
+        self.assertEqual(results["molecule"], {"outcome": "success", "outputs": {"exit_code": "2"}})
+        self.assertEqual("success", results["next"]["outcome"])
+        self.assertEqual("failure", results["cleanup"]["outcome"])
+        self.assertEqual("quality-cell first failed phase=molecule exit=2\n", diagnostic.getvalue())
+
     def test_failed_test_still_captures_destroys_and_records_inside_cell(self):
         module = self.load_driver()
         with tempfile.TemporaryDirectory() as temporary:
