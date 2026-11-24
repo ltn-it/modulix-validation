@@ -76,18 +76,56 @@ class QualityConnectionContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             self.fixture(root)
-            shutil.rmtree(root/".git")
-            private = root/"private"
-            private.mkdir(mode=0o700)
-            result = subprocess.run(
-                ["python3", str(ACTION/"run-cell.py"), "--molecule-phase", "test", str(private)],
-                cwd=root, env={**os.environ, "QUALITY_SCENARIO": "fixture",
-                               "QUALITY_INCUS_PROJECT": "bound-test-project"},
-                capture_output=True, text=True, check=False)
-            self.assertEqual(0, result.returncode, result.stderr)
-            self.assertEqual({"ansible_incus_remote": "quality", "ansible_incus_project": "bound-test-project"},
-                             json.loads((private/"incus-vars.json").read_bytes()))
-            self.assertFalse((root/".git").exists())
+            shutil.rmtree(root / ".git")
+            environment = {**os.environ, "QUALITY_SCENARIO": "fixture", "QUALITY_INCUS_RUNTIME_SCHEMA": "2",
+                           "QUALITY_INCUS_PROJECT": "bound-test-project"}
+            project_config = root / ".config/molecule/config.yml"
+            for phase in ("test", "cleanup", "destroy"):
+                with self.subTest(phase=phase):
+                    private = root / phase
+                    private.mkdir(mode=0o700)
+                    result = subprocess.run(
+                        ["python3", str(ACTION / "run-cell.py"), "--molecule-phase", phase, str(private)],
+                        cwd=root, env=environment, capture_output=True, text=True, check=False)
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    self.assertEqual({"ansible_incus_remote": "quality", "ansible_incus_project": "bound-test-project"},
+                                     json.loads((private / "incus-vars.json").read_bytes()))
+                    argv = (private / "argv").read_bytes().decode().split("\0")[:-1]
+                    bases = [argv[i + 1] for i, flag in enumerate(argv) if flag == "--base-config"]
+                    self.assertEqual(1, sum(Path(path).resolve() == project_config for path in bases))
+                    probe = subprocess.run(
+                        ["python3", "-c", "import sys; from molecule.config import Config; "
+                         "assert Config('molecule/fixture/molecule.yml', "
+                         "args={'base_config': sys.argv[1:]}).config['prerun'] is False", *bases],
+                        cwd=root, env=environment, capture_output=True, text=True, check=False)
+                    self.assertEqual(0, probe.returncode, probe.stdout + probe.stderr)
+
+    def test_protected_archive_fails_closed_without_offline_molecule_configuration(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.fixture(root)
+            shutil.rmtree(root / ".git")
+            project_config = root / ".config/molecule/config.yml"
+            environment = {**os.environ, "QUALITY_SCENARIO": "fixture", "QUALITY_INCUS_RUNTIME_SCHEMA": "2",
+                           "QUALITY_INCUS_PROJECT": "bound-test-project"}
+            cases = (
+                ("missing", None, "requires its project Molecule configuration"),
+                ("network_prerun", "prerun: true\n", "requires prerun disabled and bundled dependencies"),
+            )
+            for scenario, content, error in cases:
+                with self.subTest(scenario=scenario):
+                    private = root / scenario
+                    private.mkdir(mode=0o700)
+                    if content is None:
+                        project_config.unlink()
+                    else:
+                        project_config.write_text(content)
+                    result = subprocess.run(
+                        ["python3", str(ACTION / "run-cell.py"), "--molecule-phase", "test", str(private)],
+                        cwd=root, env=environment, capture_output=True, text=True, check=False)
+                    self.assertNotEqual(0, result.returncode)
+                    self.assertIn(error, result.stdout + result.stderr)
+                    self.assertFalse((private / "argv").exists())
 
     def test_every_phase_supplies_private_vars_to_real_incus_connection_builder(self):
         with tempfile.TemporaryDirectory() as directory:
