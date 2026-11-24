@@ -719,10 +719,19 @@ def prepare_molecule_phase(phase: str, directory: Path) -> None:
         not isinstance(path, str) for path in defaults
     ):
         raise ValueError("unsupported Molecule base configuration discovery")
+    defaults = list(defaults)
+    protected_archive = os.environ.get("QUALITY_INCUS_RUNTIME_SCHEMA") == "2"
+    if protected_archive:
+        # The verified Source archive has no VCS metadata for Molecule's discovery.
+        project_config = Path.cwd() / ".config/molecule/config.yml"
+        if not project_config.is_file() or project_config.resolve() != project_config:
+            raise ValueError("protected Source archive requires its project Molecule configuration")
+        if all(Path(path).resolve() != project_config for path in defaults):
+            defaults.append(str(project_config))
     source = Path("molecule") / scenario / "molecule.yml"
     if not source.is_file():
         raise ValueError("Molecule scenario configuration is absent")
-    args = {"base_config": list(defaults)}
+    args = {"base_config": defaults}
     configuration = Config(str(source), args=args)
     provisioner = configuration.config["provisioner"]
     ansible = configuration.config["ansible"]
@@ -744,6 +753,8 @@ def prepare_molecule_phase(phase: str, directory: Path) -> None:
     final = Config(str(source), args={"base_config": [*defaults, str(overlay)]})
     if final.config["ansible"]["executor"]["args"]["ansible_playbook"] != executor_args:
         raise ValueError("source Molecule configuration replaced the private target carrier")
+    if protected_archive and final.config["prerun"] is not False:
+        raise ValueError("protected Molecule execution requires prerun disabled and bundled dependencies")
     command = ["molecule"]
     for path in [*defaults, str(overlay)]:
         command.extend(["--base-config", path])
