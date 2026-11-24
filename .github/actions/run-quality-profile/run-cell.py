@@ -316,6 +316,14 @@ def run_steps(
     root_finalization = root_owned_finalization(environment)
     results = {}
     failed = False
+
+    def record_failure(identity, code):
+        nonlocal failed
+        if not failed:
+            status = code if code is not None else "unavailable"
+            print(f"quality-cell first failed phase={identity} exit={status}", file=sys.stderr, flush=True)
+        failed = True
+
     environment_file = control / "environment"
     admitted_environment = dict(environment)
     identities = set()
@@ -346,11 +354,13 @@ def run_steps(
             try:
                 admitted_environment.update(private_values(environment_file, environment=True))
             except (OSError, ValueError):
-                failed, damaged = True, True
+                record_failure(identity, None)
+                damaged = True
             if damaged and not always:
                 results[identity] = {"outcome": "failure", "outputs": {}}
                 continue
             local = {**admitted_environment, "GITHUB_ENV": str(environment_file), "GITHUB_OUTPUT": str(output)}
+            code = None
             try:
                 for key, value in step.get("env", {}).items():
                     if key in {"QUALITY_FAILURE_CUSTODY", "QUALITY_INCUS_RUNTIME_SCHEMA"}:
@@ -371,7 +381,8 @@ def run_steps(
             except (OSError, ValueError, KeyError):
                 outcome, outputs = "failure", {}
             results[identity] = {"outcome": outcome, "outputs": outputs}
-            failed |= outcome != "success"
+            if outcome != "success":
+                record_failure(identity, code if code else None)
         if cancellation.signum:
             raise CellCancelled(cancellation.signum, results)
     return results

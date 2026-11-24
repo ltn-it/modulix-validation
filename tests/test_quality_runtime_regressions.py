@@ -115,6 +115,8 @@ class QualityRuntimeRegressions(unittest.TestCase):
             result = subprocess.run(["bash", "-c", phase["run"]], cwd=root,
                 env={**os.environ, "BASH_ENV": "/dev/null", "PATH": f"{binary}:{os.environ['PATH']}",
                      "KEYCLOAK_TEST_INSTANCE_TYPE": "vm", "KEYCLOAK_TEST_INSTANCE": "bound-vm",
+                     "KEYCLOAK_TEST_CPU_LIMIT": "4", "KEYCLOAK_TEST_MEMORY_LIMIT": "12GiB",
+                     "KEYCLOAK_TEST_DISK_LIMIT": "24GiB",
                      "QUALITY_INCUS_RUNTIME_SCHEMA": "2", "MOLECULE_INCUS_TRANSPORT": "tls",
                      "MOLECULE_INCUS_REMOTE": "quality", "MOLECULE_INCUS_PROJECT": "bound-test-project",
                      "QUALITY_INCUS_PROJECT": "bound-test-project", "MOLECULE_TEST_OWNER": "fixture-owner",
