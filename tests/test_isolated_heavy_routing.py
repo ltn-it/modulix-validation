@@ -9,7 +9,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/collection-quality-profile-isolated.yml"
-ADMISSION_PIN = "30f6811f2225304a54767369f17199dfe9669ae1"
+ADMISSION_PIN = "8d43dd0515d72f534ce9339b032fbddef1b3286d"
 
 
 class IsolatedHeavyRoutingTests(unittest.TestCase):
@@ -192,11 +192,13 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
             self.assertEqual(len(job["steps"]), 1)
             step = job["steps"][0]
             self.assertEqual(step["with"], {"case": "${{ needs.validate-inputs.outputs.operating-case }}"})
-            self.assertEqual(step["uses"], "ltn-it/modulix-validation/.github/actions/" + action +
-                             "@4126ba6c0c3137d3970f8d26a36f5128ad8fd563")
+            pin = ADMISSION_PIN if name == "operating-results" else "4126ba6c0c3137d3970f8d26a36f5128ad8fd563"
+            self.assertEqual(step["uses"], "ltn-it/modulix-validation/.github/actions/" + action + "@" + pin)
             path = ".github/actions/" + action + "/action.yml"
-            exact = subprocess.check_output(["git", "show", "4126ba6c0c3137d3970f8d26a36f5128ad8fd563:" + path], cwd=ROOT)
+            exact = subprocess.check_output(["git", "show", pin + ":" + path], cwd=ROOT)
             self.assertEqual(exact, (ROOT / path).read_bytes())
+            if name == "operating-results":
+                self.assertIn(b'test "$OPERATING_STATE" = closed', exact)
         self.assertEqual(jobs["profile-cells"]["timeout-minutes"], 90)
         inputs = self.workflow["on"]["workflow_call"]["inputs"] if "on" in self.workflow else self.workflow[True]["workflow_call"]["inputs"]
         self.assertEqual([inputs[k]["default"] for k in ("cpu-limit", "memory-limit", "disk-limit")],
