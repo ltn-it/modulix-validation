@@ -64,7 +64,7 @@ jobs:
     steps:
       - id: contract
         name: Compile canonical protected profile admission
-        uses: ltn-it/modulix-validation/.github/actions/admit-incus-profile@30f6811f2225304a54767369f17199dfe9669ae1
+        uses: ltn-it/modulix-validation/.github/actions/admit-incus-profile@8d43dd0515d72f534ce9339b032fbddef1b3286d
         with:
           operating-case: ${{ inputs['operating-case'] }}
           profile: ${{ inputs.profile }}
@@ -238,6 +238,6 @@ jobs:
       id-token: write
     steps:
       - name: Verify original custody after the real execution job ends
-        uses: ltn-it/modulix-validation/.github/actions/observe-operating-drill@4126ba6c0c3137d3970f8d26a36f5128ad8fd563
+        uses: ltn-it/modulix-validation/.github/actions/observe-operating-drill@8d43dd0515d72f534ce9339b032fbddef1b3286d
         with:
           case: ${{ needs.validate-inputs.outputs.operating-case }}
