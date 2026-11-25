@@ -21,9 +21,10 @@ The fresh `Final quality / <profile> / <scenario> / <target>` job calls only
 `observe-profile`. It gets no new execution lease. Root verifies the original
 execution job's actual terminal success and native upload, performs and reads
 back owned deletion, and closes the original ledger before returning a signed
-`final-quality-receipt.json`. Failed, cancelled or expired execution is retained
-under the archived four-hour custody policy; no observer turns it into ordinary
-quality success. Independent Root timers operate after the execution job ends.
+`final-quality-receipt.json`. After a failed, cancelled or expired G06 execution,
+Root verifies the original outcome, withdraws access and preserves the failure
+evidence. Cleanup starts as soon as those checks and the exact ownership check
+pass. Independent Root timers operate after the execution job ends.
 
 The observer publishes exactly that receipt as
 `root-final-quality-<run>-<profile>-<scenario>-<target>`. Source aggregation must
@@ -34,9 +35,8 @@ alone nor self-reported receipt key establishes final quality. Failure to
 publish an observer receipt does not change the already recorded execution
 outcome or grant another lease.
 
-This contract does not establish deployment, real-host acceptance or successful
-four-hour watchdog/mail delivery. Those require the actual installed Root ABI,
-protected native execution and later operating receipts.
+Deployment, real-host acceptance and watchdog and mail delivery require the
+installed Root ABI, protected native execution and operating receipts.
 
 The four installed-client execution and observer preflights require
 `check --require-capability initial-auth-idle-v1` and the exact canonical local

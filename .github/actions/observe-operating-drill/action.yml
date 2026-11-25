@@ -1,6 +1,6 @@
 ---
-name: Observe actual post-job operating custody
-description: Read original case retention after its native execution job ended, without a new lease.
+name: Verify cleanup of the original operating case
+description: Verify original case evidence and completed Root cleanup after its native execution job ended.
 inputs:
   case:
     required: true
@@ -21,7 +21,7 @@ runs:
           echo 'Installed Root client authentication-wait contract is unavailable.' >&2
           exit 1
         fi
-    - name: Verify original case custody after actual native completion
+    - name: Read Root's final evidence for the original case
       id: operating
       shell: bash
       env:
@@ -30,7 +30,7 @@ runs:
       run: |
         set -euo pipefail
         exec /usr/libexec/lightning-it/incus-runtime-client observe-operating --case "$OPERATING_CASE"
-    - name: Publish actual retained-case metadata
+    - name: Publish verified operating case metadata
       id: upload
       uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
       with:
@@ -38,7 +38,7 @@ runs:
         path: ${{ steps.operating.outputs.operating-receipt }}
         if-no-files-found: error
         retention-days: 30
-    - name: Require verified retention and publication without quality PASS
+    - name: Require verified Root cleanup and publication
       if: always()
       shell: bash
       env:
@@ -48,5 +48,5 @@ runs:
       run: |
         set -euo pipefail
         test "$OPERATING_OUTCOME" = success
-        test "$OPERATING_STATE" = retained
+        test "$OPERATING_STATE" = closed
         test "$UPLOAD_OUTCOME" = success

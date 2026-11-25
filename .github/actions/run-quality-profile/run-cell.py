@@ -344,7 +344,7 @@ def run_steps(
             if identity == "destroy" and root_finalization:
                 # Even a successful test may fail during evidence/package or
                 # native upload. Only Root can observe the terminal native job
-                # and decide destruction versus four-hour failure custody.
+                # and verify the prerequisites for resource cleanup.
                 results[identity] = {"outcome": "pending", "outputs": {"root_finalization": "pending"}}
                 continue
             if (failed and not always) or (cancelled and (not always or identity not in OWNED_FINALIZERS)):
