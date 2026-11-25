@@ -200,7 +200,7 @@ jobs:
             python3 scripts/collection_candidate_receiver.py receipt \
             --request-id "$REQUEST_ID" --controller-sha "$CONTROLLER_SHA"
       - name: Install keyless signing tool
-        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532  # v4.1.3
+        uses: sigstore/cosign-installer@881c63bd87e38389154debd8331404ce7ca8a3ab  # v4.1.4
       - name: Sign exact canonical receipt using protected workflow OIDC identity
         run: |
           set -euo pipefail
