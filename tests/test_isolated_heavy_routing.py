@@ -9,7 +9,8 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/collection-quality-profile-isolated.yml"
-ADMISSION_PIN = "8d43dd0515d72f534ce9339b032fbddef1b3286d"
+ADMISSION_PIN = "f021490aa69b0ef0500cf0f248be4fb858be52de"
+OBSERVER_PIN = "8d43dd0515d72f534ce9339b032fbddef1b3286d"
 
 
 class IsolatedHeavyRoutingTests(unittest.TestCase):
@@ -76,13 +77,13 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
         from test_operating_continuation import (SIXTH_FAILED_POST_CONTEXT, SEVENTH_FAILED_NATIVE_EXPIRY,
                                                   NINTH_FAILED_PARTIAL_PREPARATION, VERIFIED_CLOSURE,
                                                   PODMAN_REPAIR_BEFORE, PODMAN_CID_BEFORE, PODMAN_NETNS_BEFORE,
-                                                  CAPACITY_FAILURE_BEFORE, operating)
+                                                  CAPACITY_FAILURE_BEFORE, C22_CLOSED_BEFORE, operating)
         step = self.workflow["jobs"]["validate-inputs"]["steps"][0]
         pin = step["uses"].rsplit("@", 1)[1]
         raw = subprocess.check_output(["git", "show", pin + ":.github/actions/admit-incus-profile/admission.py"], cwd=ROOT)
         for parent in (SIXTH_FAILED_POST_CONTEXT, SEVENTH_FAILED_NATIVE_EXPIRY,
                        NINTH_FAILED_PARTIAL_PREPARATION, VERIFIED_CLOSURE, PODMAN_REPAIR_BEFORE, PODMAN_CID_BEFORE,
-                       PODMAN_NETNS_BEFORE, CAPACITY_FAILURE_BEFORE):
+                       PODMAN_NETNS_BEFORE, CAPACITY_FAILURE_BEFORE, C22_CLOSED_BEFORE):
             for key, value in (("CALLER_BEFORE", parent.upper()),
                                ("CALLER_ATTEMPT", "2"), ("CALLER_EVENT", "pull_request"),
                                ("CALLER_REPOSITORY", "foreign/fork"), ("CALLER_TRIGGERING_ACTOR", "litdeg"),
@@ -192,7 +193,7 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
             self.assertEqual(len(job["steps"]), 1)
             step = job["steps"][0]
             self.assertEqual(step["with"], {"case": "${{ needs.validate-inputs.outputs.operating-case }}"})
-            pin = ADMISSION_PIN if name == "operating-results" else "4126ba6c0c3137d3970f8d26a36f5128ad8fd563"
+            pin = OBSERVER_PIN if name == "operating-results" else "4126ba6c0c3137d3970f8d26a36f5128ad8fd563"
             self.assertEqual(step["uses"], "ltn-it/modulix-validation/.github/actions/" + action + "@" + pin)
             path = ".github/actions/" + action + "/action.yml"
             exact = subprocess.check_output(["git", "show", pin + ":" + path], cwd=ROOT)
