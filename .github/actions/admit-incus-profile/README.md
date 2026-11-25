@@ -81,7 +81,7 @@ Ordinary profiles reject a nonempty operating case, and the original receiver
 cannot enter this domain. Root independently verifies the genuine native job,
 commit parent and, for the follow-up, its separately approved exact continuation
 binding. The hosted caller condition alone grants no operating lease. Other
-later ordinary Main deliveries do not repeat these four-hour negative cases.
+later ordinary Main deliveries do not repeat these operating cases.
 
 The earlier authentication predecessor's original run
 [`43947870949`, attempt 1](https://github.com/ltn-it/ansible-collection-supplementary/actions/runs/43947870949)

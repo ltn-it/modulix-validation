@@ -14,7 +14,7 @@ class OperatingActionTests(unittest.TestCase):
     def test_closed_client_commands_publish_only_operating_metadata(self):
         for action_name, command, state in (
             ("run-operating-drill", "run-operating", "safety-proved-retention-armed"),
-            ("observe-operating-drill", "observe-operating", "retained"),
+            ("observe-operating-drill", "observe-operating", "closed"),
         ):
             with self.subTest(action=action_name):
                 action = yaml.safe_load((ROOT / ".github/actions" / action_name / "action.yml").read_text())
@@ -33,7 +33,7 @@ class OperatingActionTests(unittest.TestCase):
                 final = steps[-1]
                 for outcome, published, actual_state, expected in (
                     ("success", "success", state, 0), ("failure", "success", state, 1),
-                    ("success", "failure", state, 1), ("success", "success", "closed", 1),
+                    ("success", "failure", state, 1), ("success", "success", "retained", 1),
                     ("success", "success", "", 1),
                 ):
                     result = subprocess.run(["bash", "-c", final["run"]], check=False,

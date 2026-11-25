@@ -25,21 +25,17 @@ deadline, fence withdrawal and stopped state. Controller observations grant no
 authority, retention claim, or quality PASS.
 
 The native action calls the installed trusted `run-operating --case` client.
-After Root's actual READY event, that client uses the real cancellation entry
-for `broker-cancel`, or ceases only its heartbeats for
-`expiry-controller-loss`. Root's supervisor remains alive. Expected negative
-assertions pass only after genuine raw failure/cancellation/expiry and safety
-proof. The preterminal state is exactly `safety-proved-retention-armed`, with
-no fabricated native terminal time or elapsed retention.
+After Root's READY event, the client requests cancellation for `broker-cancel`
+or stops sending heartbeats for `expiry-controller-loss`. Root's supervisor
+remains alive. The execution check requires actual failure, cancellation or
+expiry and proof that Root withdrew access and stopped the VM.
 
 A distinct `Operating result / <case>` native job calls read-only
-`observe-operating --case` after execution ends. It verifies Root's actual
-`retained` state, original terminal time and four-hour deadline. Neither job
-creates a business quality receipt. Metadata artifacts use only
-`root-operating-<run>-<case>-execution` and
-`root-operating-<run>-<case>-retained`.
+`observe-operating --case` after execution ends. It verifies the original
+native outcome and Root's safety evidence. Root can clean up as soon as it
+verifies the stopped VM, withdrawn access and preserved evidence for the
+original job. The observer reads the bound proof even after cleanup.
 
-Actual four-hour retention, independent watchdog cleanup, local-mail delivery
-and unchanged foreign resources are checked later through the trusted Root
-operator channel. No observer renews the old lease or substitutes a synthetic
-clock. Failed or ambiguous safety/ownership remains a hold requiring custody.
+Operating acceptance includes independent verification of resource absence,
+local Root-mail delivery and unchanged foreign resources. Ambiguous safety
+or ownership blocks cleanup.
