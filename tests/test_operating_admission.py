@@ -28,6 +28,14 @@ class OperatingAdmissionTests(unittest.TestCase):
                 }
                 self.assertEqual(ADMISSION.admit(env), ("operating", '{"include":[]}'))
 
+    def test_c24_closed_vm_predecessor_admits_each_operating_case(self):
+        for case in ("failure", "broker-cancel", "expiry-controller-loss"):
+            with self.subTest(case=case):
+                env = operating_environment(case) | {
+                    "CALLER_BEFORE": "e14d885efe872712030a144494b00df980acfa38",
+                }
+                self.assertEqual(ADMISSION.admit(env), ("operating", '{"include":[]}'))
+
     def test_case_does_not_weaken_business_or_receiver_admission(self):
         for profile in ("heavy", "application_acceptance"):
             with self.subTest(profile=profile), self.assertRaises(ValueError):
