@@ -36,17 +36,21 @@ class OperatingAdmissionTests(unittest.TestCase):
                 }
                 self.assertEqual(ADMISSION.admit(env), ("operating", '{"include":[]}'))
 
-    def test_c25_closed_vm_predecessor_admits_each_operating_case(self):
+    def test_bound_predecessors_admit_each_operating_case(self):
         for case in ("failure", "broker-cancel", "expiry-controller-loss"):
-            for actor, actor_id in ADMISSION.SUPPLEMENTARY_ACTORS:
-                with self.subTest(case=case, actor=actor):
-                    env = operating_environment(case) | {
-                        "CALLER_BEFORE": "91f581f565ce21beb1b4ce3a59c71c8d332c951f",
-                        "CALLER_ACTOR": actor,
-                        "CALLER_ACTOR_ID": actor_id,
-                        "CALLER_TRIGGERING_ACTOR": actor,
-                    }
-                    self.assertEqual(ADMISSION.admit(env), ("operating", '{"include":[]}'))
+            for before in (
+                "91f581f565ce21beb1b4ce3a59c71c8d332c951f",
+                "462614f6c6f236383e51220828ee0b2d6af7d9c7",
+            ):
+                for actor, actor_id in ADMISSION.SUPPLEMENTARY_ACTORS:
+                    with self.subTest(case=case, before=before, actor=actor):
+                        env = operating_environment(case) | {
+                            "CALLER_BEFORE": before,
+                            "CALLER_ACTOR": actor,
+                            "CALLER_ACTOR_ID": actor_id,
+                            "CALLER_TRIGGERING_ACTOR": actor,
+                        }
+                        self.assertEqual(ADMISSION.admit(env), ("operating", '{"include":[]}'))
 
     def test_case_does_not_weaken_business_or_receiver_admission(self):
         for profile in ("heavy", "application_acceptance"):
