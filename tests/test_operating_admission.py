@@ -20,6 +20,14 @@ class OperatingAdmissionTests(unittest.TestCase):
                 self.assertEqual(ADMISSION.operating_case(env), case)
                 self.assertEqual(ADMISSION.worker_group(env), "lit-pis-prd-supplementary-isolated")
 
+    def test_c23_terminal_predecessor_admits_each_operating_case(self):
+        for case in ("failure", "broker-cancel", "expiry-controller-loss"):
+            with self.subTest(case=case):
+                env = operating_environment(case) | {
+                    "CALLER_BEFORE": "98157a078b130bc6daa61adb5bc76e17e4acac2c",
+                }
+                self.assertEqual(ADMISSION.admit(env), ("operating", '{"include":[]}'))
+
     def test_case_does_not_weaken_business_or_receiver_admission(self):
         for profile in ("heavy", "application_acceptance"):
             with self.subTest(profile=profile), self.assertRaises(ValueError):
