@@ -9,7 +9,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/collection-quality-profile-isolated.yml"
-ADMISSION_PIN = "d527a54c538a39f193f3f70a199251e832b67547"
+ADMISSION_PIN = "d81032e9f6af9c5a5c26b1a4ff813a4bf3d324f3"
 OBSERVER_PIN = "8d43dd0515d72f534ce9339b032fbddef1b3286d"
 
 
