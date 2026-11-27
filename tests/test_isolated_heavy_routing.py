@@ -9,7 +9,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/collection-quality-profile-isolated.yml"
-ADMISSION_PIN = "2fa31a1a540ea632cc1cbbd91478246e8acf22e2"
+ADMISSION_PIN = "009b6b9d4168879917bf86149ee33f592ba60293"
 OBSERVER_PIN = "8d43dd0515d72f534ce9339b032fbddef1b3286d"
 
 
@@ -77,13 +77,15 @@ class IsolatedHeavyRoutingTests(unittest.TestCase):
         from test_operating_continuation import (SIXTH_FAILED_POST_CONTEXT, SEVENTH_FAILED_NATIVE_EXPIRY,
                                                   NINTH_FAILED_PARTIAL_PREPARATION, VERIFIED_CLOSURE,
                                                   PODMAN_REPAIR_BEFORE, PODMAN_CID_BEFORE, PODMAN_NETNS_BEFORE,
-                                                  CAPACITY_FAILURE_BEFORE, C22_CLOSED_BEFORE, C27_PRELEASE_BEFORE, operating)
+                                                  CAPACITY_FAILURE_BEFORE, C22_CLOSED_BEFORE, C27_PRELEASE_BEFORE,
+                                                  C28_RETIRED_BEFORE, operating)
         step = self.workflow["jobs"]["validate-inputs"]["steps"][0]
         pin = step["uses"].rsplit("@", 1)[1]
         raw = subprocess.check_output(["git", "show", pin + ":.github/actions/admit-incus-profile/admission.py"], cwd=ROOT)
         for parent in (SIXTH_FAILED_POST_CONTEXT, SEVENTH_FAILED_NATIVE_EXPIRY,
                        NINTH_FAILED_PARTIAL_PREPARATION, VERIFIED_CLOSURE, PODMAN_REPAIR_BEFORE, PODMAN_CID_BEFORE,
-                       PODMAN_NETNS_BEFORE, CAPACITY_FAILURE_BEFORE, C22_CLOSED_BEFORE, C27_PRELEASE_BEFORE):
+                       PODMAN_NETNS_BEFORE, CAPACITY_FAILURE_BEFORE, C22_CLOSED_BEFORE, C27_PRELEASE_BEFORE,
+                       C28_RETIRED_BEFORE):
             for key, value in (("CALLER_BEFORE", parent.upper()),
                                ("CALLER_ATTEMPT", "2"), ("CALLER_EVENT", "pull_request"),
                                ("CALLER_REPOSITORY", "foreign/fork"), ("CALLER_TRIGGERING_ACTOR", "litdeg"),
