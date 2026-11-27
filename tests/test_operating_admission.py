@@ -41,6 +41,7 @@ class OperatingAdmissionTests(unittest.TestCase):
             for before in (
                 "91f581f565ce21beb1b4ce3a59c71c8d332c951f",
                 "462614f6c6f236383e51220828ee0b2d6af7d9c7",
+                "41c24d2b020d702d0009a1b0f0dd50d4c75c9477",
             ):
                 for actor, actor_id in ADMISSION.SUPPLEMENTARY_ACTORS:
                     with self.subTest(case=case, before=before, actor=actor):

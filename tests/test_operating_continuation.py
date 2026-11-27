@@ -34,12 +34,13 @@ CAPACITY_FAILURE_BEFORE = "8cf199eedd68e653f97a4739a5d0b2e7235f91f5"
 STOPPED_FAILURE_CLOSED_BEFORE = "aca24665c7d0e192974e1bb030737a349c6b70db"
 C22_CLOSED_BEFORE = "af5a45eca7e7dcaa85af8bea3e6d77c775fd8b9a"
 C26_PRELEASE_BEFORE = "462614f6c6f236383e51220828ee0b2d6af7d9c7"
+C27_PRELEASE_BEFORE = "41c24d2b020d702d0009a1b0f0dd50d4c75c9477"
 PARENTS = (HISTORICAL, FOLLOW_UP, PREAUTH_FOLLOW_UP, THIRD_FAILED, FOURTH_FAILED, FIFTH_FAILED_WITH_EFFECTS,
            SIXTH_FAILED_POST_CONTEXT, SEVENTH_FAILED_NATIVE_EXPIRY, EIGHTH_FAILED_CATALOGUE_READER,
            NINTH_FAILED_PARTIAL_PREPARATION, TENTH_FAILED_BEFORE_LEASE, VERIFIED_CLOSURE, PODMAN_REPAIR_BEFORE,
            CENSUS_HELD_BEFORE, SEALED_INTAKE_BEFORE, ENGINE_RETIREMENT_BEFORE, LEDGER_READ_BEFORE,
            PODMAN_CID_BEFORE, PODMAN_NETNS_BEFORE, CAPACITY_FAILURE_BEFORE, STOPPED_FAILURE_CLOSED_BEFORE,
-           C22_CLOSED_BEFORE, C26_PRELEASE_BEFORE)
+           C22_CLOSED_BEFORE, C26_PRELEASE_BEFORE, C27_PRELEASE_BEFORE)
 CASES = ("failure", "broker-cancel", "expiry-controller-loss")
 
 
@@ -193,7 +194,7 @@ class OperatingContinuationEntryTests(unittest.TestCase):
         changes += tuple(("CALLER_BEFORE", value) for parent in (THIRD_FAILED, FOURTH_FAILED, FIFTH_FAILED_WITH_EFFECTS,
                                                                      SIXTH_FAILED_POST_CONTEXT,
                                                                      SEVENTH_FAILED_NATIVE_EXPIRY, EIGHTH_FAILED_CATALOGUE_READER,
-                                                                     NINTH_FAILED_PARTIAL_PREPARATION, VERIFIED_CLOSURE,
+                                                                     NINTH_FAILED_PARTIAL_PREPARATION, VERIFIED_CLOSURE, C27_PRELEASE_BEFORE,
                                                                      PODMAN_REPAIR_BEFORE, SEALED_INTAKE_BEFORE)
                          for value in (parent.upper(), parent[:-1], parent + "0", " " + parent))
         for parent in PARENTS:
